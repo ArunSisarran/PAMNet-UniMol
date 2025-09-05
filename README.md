@@ -1,1 +1,1 @@
-# SynthMol
+# PAMNet + UniMol
