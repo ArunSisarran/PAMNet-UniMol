@@ -1,0 +1,6 @@
+[submodule "external/unimol"]
+	path = external/unimol
+	url = https://github.com/deepmodeling/Uni-Mol.git
+[submodule "external/pamnet"]
+	path = external/pamnet
+	url = https://github.com/XieResearchGroup/Physics-aware-Multiplex-GNN.git
