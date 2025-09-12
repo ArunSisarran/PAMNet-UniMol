@@ -28,7 +28,7 @@ class DataProcessing:
         if mol is None:
             return None
         
-        mol.Chem.AddHs(mol)
+        mol = Chem.AddHs(mol)
         AllChem.EmbedMolecule(mol, randomSeed=42)
         AllChem.UFFOptimizeMolecule(mol)
         
@@ -97,3 +97,57 @@ class DataProcessing:
         }
 
         return result
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    
+    test_smiles = [
+        "CC(=O)OC1=CC=CC=C1C(=O)O",  # Aspirin
+        "CCO",  # Ethanol
+        "C1=CC=CC=C1",  # Benzene
+    ]
+    
+    print("Testing DataProcessing class...")
+    print(f"Test SMILES: {test_smiles}")
+    
+    print("\n1. Testing UniMol processing only...")
+    try:
+        data_processor = DataProcessing()
+        
+        print("\n2. Testing SMILES to PAMNet data conversion...")
+        for i, smiles in enumerate(test_smiles):
+            print(f"  Converting SMILES {i+1}: {smiles}")
+            pamnet_data = data_processor.smiles_to_pamnet(smiles)
+            if pamnet_data is not None:
+                print(f"    Success! Atoms: {pamnet_data.x.shape[0]}, Edges: {pamnet_data.edge_index.shape[1]}")
+                print(f"    Atomic numbers: {pamnet_data.x[:10].tolist()}...")  
+                print(f"    Position shape: {pamnet_data.pos.shape}")
+            else:
+                print(f"    Failed to convert SMILES: {smiles}")
+        
+        print("\n3. Testing UniMol processing...")
+        unimol_result = data_processor.data_process_unimol(test_smiles)
+        if unimol_result is not None:
+            print(f"    UniMol result type: {type(unimol_result)}")
+            if hasattr(unimol_result, 'shape'):
+                print(f"    UniMol result shape: {unimol_result.shape}")
+            elif isinstance(unimol_result, dict):
+                print(f"    UniMol result keys: {list(unimol_result.keys())}")
+                for key, value in unimol_result.items():
+                    if hasattr(value, 'shape'):
+                        print(f"      {key} shape: {value.shape}")
+            else:
+                print(f"    UniMol result: {unimol_result}")
+        
+        print("\n4. Testing combined processing (UniMol only)...")
+        combined_result = data_processor.data_process_pamnet_unimol(test_smiles)
+        print(f"    Combined result keys: {list(combined_result.keys())}")
+        print(f"    PAMNet result: {combined_result['pamnet result']}")
+        print(f"    UniMol result type: {type(combined_result['unimol result'])}")
+        
+    except Exception as e:
+        print(f"Error during testing: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    print("\nTesting completed!")
