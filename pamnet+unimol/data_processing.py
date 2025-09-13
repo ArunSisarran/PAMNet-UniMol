@@ -100,7 +100,7 @@ class DataProcessing:
        if unimol_result is None:
             return None
             
-        if isinstance(unimol_result, dict) and 'cls_repr' in unimol_result:
+       if isinstance(unimol_result, dict) and 'cls_repr' in unimol_result:
             cls_repr = unimol_result['cls_repr']
             if isinstance(cls_repr, list):
                 embeddings = np.stack(cls_repr)
@@ -109,7 +109,7 @@ class DataProcessing:
                 if not isinstance(cls_repr, torch.Tensor):
                     return torch.tensor(cls_repr, dtype=torch.float32)
                 return cls_repr
-        else:
+       else:
             return None
 
     def data_process_pamnet_unimol(self, smiles_list):
