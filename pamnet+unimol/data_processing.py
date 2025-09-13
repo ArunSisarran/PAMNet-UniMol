@@ -5,6 +5,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 import torch
 from torch_geometric.data import Data
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,6 @@ class DataProcessing:
                 data_list.append(data)
 
         if not data_list:
-            logger.warning("No valid molecules for PAMNet")
             return None
 
         batch = Batch.from_data_list(data_list)
@@ -94,7 +94,6 @@ class DataProcessing:
             )
             return unimol_output
         except Exception as e:
-            logger.error(f"UniMol processing failed: {e}")
             return None
 
     def extract_unimol_embeddings(self, unimol_result):
@@ -104,17 +103,13 @@ class DataProcessing:
         if isinstance(unimol_result, dict) and 'cls_repr' in unimol_result:
             cls_repr = unimol_result['cls_repr']
             if isinstance(cls_repr, list):
-                # Convert list of numpy arrays to torch tensor
-                import numpy as np
-                embeddings = np.stack(cls_repr)  # [batch_size, 768]
+                embeddings = np.stack(cls_repr)
                 return torch.tensor(embeddings, dtype=torch.float32)
             else:
-                # If cls_repr is already a tensor/array
                 if not isinstance(cls_repr, torch.Tensor):
                     return torch.tensor(cls_repr, dtype=torch.float32)
                 return cls_repr
         else:
-            logger.warning(f"Cannot extract embeddings from UniMol result: {type(unimol_result)}")
             return None
 
     def data_process_pamnet_unimol(self, smiles_list):
@@ -132,68 +127,26 @@ class DataProcessing:
         return result
 
     def get_output_dimensions(self, sample_smiles=["CCO"]):
-        """Helper method to determine output dimensions"""
+        """
+        Helper method to determine output dimensions
+        """
         results = self.data_process_pamnet_unimol(sample_smiles)
-        
+    
         dimensions = {}
-        
+    
         if results["pamnet_result"] is not None:
-            pamnet_shape = results["pamnet_result"].shape
-            dimensions["pamnet"] = pamnet_shape[-1] if len(pamnet_shape) > 1 else pamnet_shape[0]
+            dimensions["pamnet"] = results["pamnet_result"].shape[-1]
         else:
             dimensions["pamnet"] = None
-            
-        if results["unimol_result"] is not None:
-            unimol_data = results["unimol_result"]
-            if isinstance(unimol_data, dict):
-                for key in ['cls_repr', 'molecule_repr', 'pooled_output']:
-                    if key in unimol_data:
-                        data_item = unimol_data[key]
-                        
-                        if hasattr(data_item, 'shape'):
-                            dimensions["unimol"] = data_item.shape[-1]
-                            dimensions["unimol_format"] = f"tensor with shape {data_item.shape}"
-                            break
-                        elif isinstance(data_item, list):
-                            if len(data_item) > 0:
-                                first_item = data_item[0]
-                                if hasattr(first_item, 'shape'):
-                                    dimensions["unimol"] = first_item.shape[-1]
-                                    dimensions["unimol_format"] = f"list of tensors, first shape: {first_item.shape}"
-                                elif isinstance(first_item, (list, tuple)):
-                                    dimensions["unimol"] = len(first_item)
-                                    dimensions["unimol_format"] = f"list of lists, inner length: {len(first_item)}"
-                                else:
-                                    dimensions["unimol"] = len(data_item)
-                                    dimensions["unimol_format"] = f"list of {type(first_item).__name__}, length: {len(data_item)}"
-                            else:
-                                dimensions["unimol"] = 0
-                                dimensions["unimol_format"] = "empty list"
-                            break
-                        else:
-                            dimensions["unimol"] = f"Unknown type: {type(data_item)}"
-                            dimensions["unimol_format"] = f"type: {type(data_item)}"
-                            break
-                else:
-                    key_info = {}
-                    for k, v in unimol_data.items():
-                        if hasattr(v, 'shape'):
-                            key_info[k] = f"tensor({v.shape})"
-                        elif isinstance(v, list):
-                            if len(v) > 0:
-                                key_info[k] = f"list[{len(v)}] of {type(v[0]).__name__}"
-                            else:
-                                key_info[k] = "empty list"
-                        else:
-                            key_info[k] = str(type(v).__name__)
-                    dimensions["unimol"] = f"Available keys and types: {key_info}"
-            else:
-                dimensions["unimol"] = unimol_data.shape[-1] if hasattr(unimol_data, 'shape') else "Unknown"
+        
+        if results["unimol_embeddings"] is not None:
+            dimensions["unimol"] = results["unimol_embeddings"].shape[-1]
         else:
             dimensions["unimol"] = None
             
         return dimensions
 
+           
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     
