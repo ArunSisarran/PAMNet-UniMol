@@ -2,7 +2,7 @@ import logging
 from torch_geometric.data import Batch
 from unimol_tools import UniMolRepr
 from rdkit import Chem
-from rdkit.chem import AllChem
+from rdkit.Chem import AllChem
 import torch
 from torch_geometric.data import Data
 
