@@ -15,7 +15,19 @@ class DataProcessing:
     """
 
     def __init__(self, pamnet_model=None, unimol_model: str="unimolv2", unimol_model_size: str="84m"):
-        self.pamnet_model = pamnet_model
+
+        map_location = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+        if pamnet_model is None:
+            try:
+               self.pamnet_model = torch.load("pamnet.pt", map_location=map_location) 
+               self.pamnet_model.eval()
+            except Exception as e:
+                print("failed to load pamnet model")
+                self.pamnet_model = None
+        else:
+            self.pamnet_model = pamnet_model
+
         self.unimol_model = UniMolRepr(
             data_type="molecule",
             model_name=unimol_model,
