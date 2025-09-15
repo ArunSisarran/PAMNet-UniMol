@@ -1,4 +1,6 @@
 import logging
+import sys
+import os
 from torch_geometric.data import Batch
 from unimol_tools import UniMolRepr
 from rdkit import Chem
@@ -7,6 +9,12 @@ import torch
 from torch_geometric.data import Data
 import numpy as np
 
+current_dir = os.path.dirname(os.path.abspath(__file__))
+pamnet_dir = os.path.join(os.path.dirname(current_dir), "Physics-aware-Multiplex-GNN")
+sys.path.append(pamnet_dir)
+
+from models import PAMNet, Config
+
 logger = logging.getLogger(__name__)
 
 class DataProcessing:
@@ -14,16 +22,32 @@ class DataProcessing:
     Passes the SMILES input to both the PAMNet model and the UniMol model
     """
 
-    def __init__(self, pamnet_model=None, unimol_model: str="unimolv2", unimol_model_size: str="84m"):
+    def __init__(self, pamnet_model=None, pamnet_state_dict_path="pamnet_rna.pt", 
+                 unimol_model: str="unimolv2", unimol_model_size: str="84m"):
 
         map_location = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         if pamnet_model is None:
             try:
-               self.pamnet_model = torch.load("pamnet.pt", map_location=map_location) 
-               self.pamnet_model.eval()
+                state_dict = torch.load(pamnet_state_dict_path, map_location=map_location)
+                
+                config = Config(
+                    dataset="rna",
+                    dim=16,
+                    n_layer=1,
+                    cutoff_l=5.0,
+                    cutoff_g=10.0,
+                    flow='source_to_target'
+                )
+                
+                self.pamnet_model = PAMNet(config)
+                self.pamnet_model.load_state_dict(state_dict)
+                self.pamnet_model.eval()
+                
+                logger.info(f"loaded PAMNet model from {pamnet_state_dict_path}")
+                
             except Exception as e:
-                print("failed to load pamnet model")
+                logger.error(f"failed to load PAMNet model from {pamnet_state_dict_path}: {e}")
                 self.pamnet_model = None
         else:
             self.pamnet_model = pamnet_model
@@ -51,29 +75,69 @@ class DataProcessing:
         except Exception as e:
             logger.warning(f"Could not generate 3D coordinates for {smiles}: {e}")
         
-        atomic_nums = [atom.GetAtomicNum() for atom in mol.GetAtoms()]
+        atomic_nums = []
+        positions = []
         
         conformer = mol.GetConformer()
-        positions = []
-        for i in range(mol.GetNumAtoms()):
+        for i, atom in enumerate(mol.GetAtoms()):
+            atomic_num = atom.GetAtomicNum()
+            
+            if hasattr(self, 'pamnet_model') and self.pamnet_model is not None:
+                if hasattr(self.pamnet_model, 'dataset') and self.pamnet_model.dataset[:3].lower() == "rna":
+                    if atomic_num == 6:  # Carbon
+                        atomic_nums.append(0)
+                    elif atomic_num == 7:  # Nitrogen
+                        atomic_nums.append(1)
+                    elif atomic_num == 8:  # Oxygen
+                        atomic_nums.append(2)
+                    else:
+                        continue
+                else:
+                    atomic_nums.append(atomic_num)
+            else:
+                atomic_nums.append(atomic_num)
+            
             pos = conformer.GetAtomPosition(i)
             positions.append([pos.x, pos.y, pos.z])
         
+        if not atomic_nums:
+            logger.warning(f"No valid atoms found for SMILES: {smiles}")
+            return None
+        
         edge_indices = []
+        edge_attrs = []
         for bond in mol.GetBonds():
             i = bond.GetBeginAtomIdx()
             j = bond.GetEndAtomIdx()
+            
+            if i >= len(atomic_nums) or j >= len(atomic_nums):
+                continue
+                
+            bond_type = bond.GetBondTypeAsDouble()
             edge_indices.extend([[i, j], [j, i]])
+            edge_attrs.extend([bond_type, bond_type])
 
-        x = torch.tensor(atomic_nums, dtype=torch.long)
+        if hasattr(self, 'pamnet_model') and self.pamnet_model is not None:
+            if hasattr(self.pamnet_model, 'dataset') and self.pamnet_model.dataset[:3].lower() == "rna":
+                x_data = []
+                for i, (pos, atom_type) in enumerate(zip(positions, atomic_nums)):
+                    x_data.append(pos + [atom_type])
+                x = torch.tensor(x_data, dtype=torch.float32)
+            else:
+                x = torch.tensor(atomic_nums, dtype=torch.long)
+        else:
+            x = torch.tensor(atomic_nums, dtype=torch.long)
+
         pos = torch.tensor(positions, dtype=torch.float32)
 
         if edge_indices:
             edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
+            edge_attr = torch.tensor(edge_attrs, dtype=torch.float32)
         else:
             edge_index = torch.empty((2, 0), dtype=torch.long)
+            edge_attr = torch.empty((0,), dtype=torch.float32)
         
-        return Data(x=x, edge_index=edge_index, pos=pos)
+        return Data(x=x, edge_index=edge_index, edge_attr=edge_attr, pos=pos)
 
     def data_process_pamnet(self, smiles_list):
         """Process SMILES list through PAMNet model"""
@@ -91,6 +155,9 @@ class DataProcessing:
             return None
 
         batch = Batch.from_data_list(data_list)
+        
+        device = next(self.pamnet_model.parameters()).device
+        batch = batch.to(device)
 
         with torch.no_grad():
             pamnet_output = self.pamnet_model(batch)
@@ -106,6 +173,7 @@ class DataProcessing:
             )
             return unimol_output
         except Exception as e:
+            logger.error(f"Error in UniMol processing: {e}")
             return None
 
     def extract_unimol_embeddings(self, unimol_result):
@@ -158,9 +226,13 @@ class DataProcessing:
             
         return dimensions
 
+
+
            
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    
+    data_processor = DataProcessing()
     
     test_smiles = [
         "CC(=O)OC1=CC=CC=C1C(=O)O",  # Aspirin
@@ -168,12 +240,10 @@ if __name__ == "__main__":
         "C1=CC=CC=C1",  # Benzene
     ]
     
-    print("Testing DataProcessing class...")
+    print(f"\nTesting DataProcessing class...")
     print(f"Test SMILES: {test_smiles}")
     
     try:
-        data_processor = DataProcessing()
-        
         print("\n1. Testing SMILES to PAMNet data conversion...")
         for i, smiles in enumerate(test_smiles):
             print(f"  Converting SMILES {i+1}: {smiles}")
@@ -182,10 +252,23 @@ if __name__ == "__main__":
                 print(f"    Success! Atoms: {pamnet_data.x.shape[0]}, Edges: {pamnet_data.edge_index.shape[1]}")
                 print(f"    Atomic numbers: {pamnet_data.x[:10].tolist()}...")  
                 print(f"    Position shape: {pamnet_data.pos.shape}")
+                if hasattr(pamnet_data, 'edge_attr'):
+                    print(f"    Edge attributes shape: {pamnet_data.edge_attr.shape}")
             else:
                 print(f"    Failed to convert SMILES: {smiles}")
         
-        print("\n2. Testing UniMol processing...")
+        if data_processor.pamnet_model is not None:
+            print("\n2. Testing PAMNet processing...")
+            pamnet_result = data_processor.data_process_pamnet(test_smiles[:1])
+            if pamnet_result is not None:
+                print(f"    PAMNet result shape: {pamnet_result.shape}")
+                print(f"    PAMNet result type: {type(pamnet_result)}")
+            else:
+                print("    PAMNet processing failed")
+        else:
+            print("\n2. Skipping PAMNet testing - model not loaded")
+        
+        print("\n3. Testing UniMol processing...")
         unimol_result = data_processor.data_process_unimol(test_smiles)
         if unimol_result is not None:
             print(f"    UniMol result type: {type(unimol_result)}")
@@ -199,13 +282,13 @@ if __name__ == "__main__":
             else:
                 print(f"    UniMol result: {unimol_result}")
         
-        print("\n3. Testing combined processing...")
+        print("\n4. Testing combined processing...")
         combined_result = data_processor.data_process_pamnet_unimol(test_smiles)
         print(f"    Combined result keys: {list(combined_result.keys())}")
         print(f"    PAMNet result: {combined_result['pamnet_result']}")
         print(f"    UniMol result type: {type(combined_result['unimol_result'])}")
         
-        print("\n4. Getting output dimensions...")
+        print("\n5. Getting output dimensions...")
         dimensions = data_processor.get_output_dimensions(test_smiles[:1])
         print(f"    Output dimensions: {dimensions}")
         
