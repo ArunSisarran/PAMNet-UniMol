@@ -1,0 +1,124 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+.env
+.conda/
+conda-meta/
+
+# PyTorch & ML
+*.pth
+*.pt
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.ckpt
+checkpoints/
+models/
+saved_models/
+weights/
+*.model
+*.bin
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Data files (uncomment if you don't want to track data)
+# data/
+# datasets/
+# *.csv
+# *.json
+# *.sdf
+# *.mol
+# *.xyz
+
+# Logs
+logs/
+*.log
+*.out
+*.err
+wandb/
+tensorboard_logs/
+tb_logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+.pytest_cache/
+
+# Configuration files with secrets
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+config.yaml
+secrets.yaml
+
+# CUDA cache
+.nv_cache/
+
+# PyTorch Geometric
+.torch/
+
+# Experimental results
+results/
+experiments/
+outputs/
+plots/
+figures/
+
+# Large files
+*.tar
+*.tar.gz
+*.zip
+*.rar
+
+# Backup files
+*.bak
+*.backup
