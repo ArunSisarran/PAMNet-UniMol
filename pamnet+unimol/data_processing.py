@@ -22,7 +22,7 @@ class DataProcessing:
     Passes the SMILES input to both the PAMNet model and the UniMol model
     """
 
-    def __init__(self, pamnet_model=None, pamnet_state_dict_path="pamnet_rna.pt", 
+    def __init__(self, pamnet_model=None, pamnet_state_dict_path="../Physics-aware-Multiplex-GNN/save/pamnet_rna.pt", 
                  unimol_model: str="unimolv2", unimol_model_size: str="84m"):
 
         map_location = 'cuda' if torch.cuda.is_available() else 'cpu'
