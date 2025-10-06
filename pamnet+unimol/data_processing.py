@@ -8,6 +8,7 @@ from rdkit.Chem import AllChem
 import torch
 from torch_geometric.data import Data
 import numpy as np
+import re
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 pamnet_dir = os.path.join(os.path.dirname(current_dir), "Physics-aware-Multiplex-GNN")
@@ -163,34 +164,120 @@ class DataProcessing:
             pamnet_output = self.pamnet_model(batch)
 
         return pamnet_output
+    
+    def clean_smiles(self, smiles):
+        """
+        Clean SMILES for UniMol compatibility
+        """
+    
+        if '[H]' in smiles:
+            cleaned = re.sub(r'\[H\]', '', smiles)
+            cleaned = re.sub(r'\(\)', '', cleaned)  
+        else:
+            cleaned = smiles
+    
+        try:
+            mol = Chem.MolFromSmiles(cleaned)
+            if mol is not None:
+                canonical = Chem.MolToSmiles(mol)
+                return canonical
+            else:
+                logger.warning(f"Invalid SMILES (RDKit can't parse): {smiles[:80]}")
+                return None
+        except Exception as e:
+            logger.warning(f"Error processing SMILES: {smiles[:80]} - {e}")
+            return None
 
     def data_process_unimol(self, smiles_list):
-        """Process SMILES list through UniMol model"""
+        """
+        Process SMILES through UniMol with robust error handling
+        """
+        # Clean all SMILES
+        cleaned_smiles = []
+        valid_indices = []
+    
+        for idx, smiles in enumerate(smiles_list):
+            clean = self.clean_smiles(smiles)
+            if clean is not None:
+                cleaned_smiles.append(clean)
+                valid_indices.append(idx)
+            else:
+                cleaned_smiles.append("C")  
+    
         try:
             unimol_output = self.unimol_model.get_repr(
-                smiles_list,
+                cleaned_smiles,
                 return_atomic_reprs=True
             )
+
+            if 'cls_repr' in unimol_output:
+                cls_reprs = unimol_output['cls_repr']
+                for idx in range(len(smiles_list)):
+                    if idx not in valid_indices:
+                        cls_reprs[idx] = None
+                unimol_output['cls_repr'] = cls_reprs
+                unimol_output['valid_indices'] = valid_indices
+
             return unimol_output
+
         except Exception as e:
-            logger.error(f"Error in UniMol processing: {e}")
+            logger.error(f"UniMol processing failed: {e}")
             return None
 
     def extract_unimol_embeddings(self, unimol_result):
-       if unimol_result is None:
+        """
+        Extract embeddings, using zero vectors for invalid molecules
+        """
+        import numpy as np
+    
+        if unimol_result is None:
             return None
-            
-       if isinstance(unimol_result, dict) and 'cls_repr' in unimol_result:
+    
+        if isinstance(unimol_result, dict) and 'cls_repr' in unimol_result:
             cls_repr = unimol_result['cls_repr']
+
             if isinstance(cls_repr, list):
-                embeddings = np.stack(cls_repr)
-                return torch.tensor(embeddings, dtype=torch.float32)
+                emb_dim = None
+                for emb in cls_repr:
+                    if emb is not None:
+                        emb_dim = len(emb) if isinstance(emb, (list, np.ndarray)) else emb.shape[-1]
+                        break
+
+                if emb_dim is None:
+                    emb_dim = 512  
+
+                processed_reprs = []
+                for emb in cls_repr:
+                    if emb is not None:
+                        processed_reprs.append(emb)
+                    else:
+                        processed_reprs.append(np.zeros(emb_dim, dtype=np.float32))
+
+                embeddings = np.stack(processed_reprs)
+                embeddings_tensor = torch.tensor(embeddings, dtype=torch.float32)
+
+                if embeddings_tensor.dim() == 1:
+                    embeddings_tensor = embeddings_tensor.unsqueeze(0)
+                elif embeddings_tensor.dim() > 2:
+                    batch_size = embeddings_tensor.shape[0]
+                    feature_dim = embeddings_tensor.shape[-1]
+                    embeddings_tensor = embeddings_tensor.view(batch_size, feature_dim)
+
+                return embeddings_tensor
             else:
                 if not isinstance(cls_repr, torch.Tensor):
-                    return torch.tensor(cls_repr, dtype=torch.float32)
+                    cls_repr = torch.tensor(cls_repr, dtype=torch.float32)
+
+                if cls_repr.dim() == 1:
+                    cls_repr = cls_repr.unsqueeze(0)
+                elif cls_repr.dim() > 2:
+                    batch_size = cls_repr.shape[0]
+                    feature_dim = cls_repr.shape[-1]
+                    cls_repr = cls_repr.view(batch_size, feature_dim)
+
                 return cls_repr
-       else:
-            return None
+    
+        return None
 
     def data_process_pamnet_unimol(self, smiles_list):
         """Process SMILES through both models"""

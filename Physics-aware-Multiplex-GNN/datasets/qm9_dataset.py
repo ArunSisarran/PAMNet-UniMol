@@ -7,6 +7,7 @@ from tqdm import tqdm
 import torch
 import torch.nn.functional as F
 from torch_geometric.data import (InMemoryDataset, download_url, extract_zip, Data)
+import re
 
 try:
     import rdkit
@@ -46,7 +47,48 @@ atomrefs = {
     ],
     11: [0., 0., 0., 0., 0.],
 }
-
+def generate_clean_smiles(mol):
+    """Generate clean SMILES from QM9 molecule, handling valence issues"""
+    
+    try:
+        smiles_with_h = Chem.MolToSmiles(mol)
+        smiles_no_h = re.sub(r'\[H\]', '', smiles_with_h)
+        smiles_no_h = re.sub(r'\(\)', '', smiles_no_h)
+        
+        mol_from_clean = Chem.MolFromSmiles(smiles_no_h)
+        if mol_from_clean:
+            return Chem.MolToSmiles(mol_from_clean)
+        return smiles_no_h
+    except:
+        pass
+    
+    try:
+        new_mol = Chem.RWMol()
+        atom_map = {}
+        
+        for idx, atom in enumerate(mol.GetAtoms()):
+            if atom.GetAtomicNum() != 1:  
+                new_atom = Chem.Atom(atom.GetAtomicNum())
+                new_idx = new_mol.AddAtom(new_atom)
+                atom_map[idx] = new_idx
+        
+        for bond in mol.GetBonds():
+            begin_idx = bond.GetBeginAtomIdx()
+            end_idx = bond.GetEndAtomIdx()
+            if begin_idx in atom_map and end_idx in atom_map:
+                new_mol.AddBond(
+                    atom_map[begin_idx],
+                    atom_map[end_idx],
+                    bond.GetBondType()
+                )
+        
+        final_mol = new_mol.GetMol()
+        Chem.SanitizeMol(final_mol)
+        return Chem.MolToSmiles(final_mol)
+    except:
+        pass
+    
+    return None
 
 class QM9(InMemoryDataset):
     r"""The QM9 dataset from the `"MoleculeNet: A Benchmark for Molecular
@@ -125,7 +167,7 @@ class QM9(InMemoryDataset):
 
     def __init__(self, root, transform=None, pre_transform=None, pre_filter=None):
         super(QM9, self).__init__(root, transform, pre_transform, pre_filter)
-        self.data, self.slices = torch.load(self.processed_paths[0])
+        self.data, self.slices = torch.load(self.processed_paths[0], weights_only=False)
 
     def mean(self, target):
         y = torch.cat([self.get(i).y for i in range(len(self))], dim=0)
@@ -172,7 +214,7 @@ class QM9(InMemoryDataset):
             print('Using a pre-processed version of the dataset. Please '
                   'install `rdkit` to alternatively process the raw data.')
 
-            self.data, self.slices = torch.load(self.raw_paths[0])
+            self.data, self.slices = torch.load(self.raw_paths[0], weights_only=False)
             data_list = [self.get(i) for i in range(len(self))]
 
             if self.pre_filter is not None:
@@ -255,6 +297,11 @@ class QM9(InMemoryDataset):
             name = mol.GetProp('_Name')
 
             data = Data(x=x, pos=pos, edge_index=edge_index, y=y)
+            smiles = generate_clean_smiles(mol)
+            if smiles:
+                data.smiles = smiles
+            else:
+                data.smiles = "C"  # Fallback for problematic molecules
 
             if self.pre_filter is not None and not self.pre_filter(data):
                 continue
