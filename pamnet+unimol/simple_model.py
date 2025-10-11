@@ -27,7 +27,6 @@ from ema import EMA
 
 sys.path.append(os.path.join(pamnet_dir, "datasets"))
 from qm9_dataset import QM9
-from data_processing import DataProcessing
 
 
 class QM9WithEmbeddings(torch.utils.data.Dataset):
@@ -44,22 +43,16 @@ class QM9WithEmbeddings(torch.utils.data.Dataset):
 
 
 def collate_with_embeddings(batch):
-    """Custom collate function to handle (data, embedding) tuples"""
     from torch_geometric.data import Batch
     
     data_list, embeddings = zip(*batch)
-    
     batched_data = Batch.from_data_list(data_list)
-    
     batched_embeddings = torch.stack(embeddings)
     
     return batched_data, batched_embeddings
 
 
 class SimpleHybridModel(nn.Module):
-    """
-    Hybrid model: Use PAMNet's learned node representations + UniMol molecular embeddings
-    """
     def __init__(self, pamnet_model, unimol_dim=512, freeze_pamnet=False):
         super(SimpleHybridModel, self).__init__()
         self.pamnet_model = pamnet_model
@@ -77,16 +70,30 @@ class SimpleHybridModel(nn.Module):
             nn.Linear(concat_dim, 512),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(512, 128),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(256, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(128, 1)
         )
         
+        self._init_weights()
+        
+    def _init_weights(self):
+        for module in self.fusion.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight, gain=0.1)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+    
+    def set_output_bias(self, target_mean):
+        final_layer = self.fusion[-1]
+        if isinstance(final_layer, nn.Linear) and final_layer.bias is not None:
+            nn.init.constant_(final_layer.bias, target_mean)
+        
     def extract_pamnet_features(self, data):
-        """
-        Run PAMNet forward pass and extract final node embeddings before pooling
-        """
         from torch_geometric.nn import global_add_pool, radius
         from torch_geometric.utils import remove_self_loops
         
@@ -112,13 +119,13 @@ class SimpleHybridModel(nn.Module):
         
         pos_ji, pos_kj = pos[idx_j] - pos[idx_i], pos[idx_k] - pos[idx_j]
         a = (pos_ji * pos_kj).sum(dim=-1)
-        b = torch.cross(pos_ji, pos_kj).norm(dim=-1)
+        b = torch.linalg.cross(pos_ji, pos_kj).norm(dim=-1)
         angle2 = torch.atan2(b, a)
         
         pos_i_pair, pos_j1_pair, pos_j2_pair = pos[idx_i_pair], pos[idx_j1_pair], pos[idx_j2_pair]
         pos_ji_pair, pos_jj_pair = pos_j1_pair - pos_i_pair, pos_j2_pair - pos_j1_pair
         a = (pos_ji_pair * pos_jj_pair).sum(dim=-1)
-        b = torch.cross(pos_ji_pair, pos_jj_pair).norm(dim=-1)
+        b = torch.linalg.cross(pos_ji_pair, pos_jj_pair).norm(dim=-1)
         angle1 = torch.atan2(b, a)
         
         rbf_l = self.pamnet_model.rbf_l(dist_l)
@@ -167,13 +174,10 @@ def set_seed(seed):
     np.random.seed(seed)
     random.seed(seed)
 
-
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-
 def save_training_log(log_path, epoch, train_mae, val_mae, test_mae, epoch_time, lr, is_best=False):
-    """Save training metrics to CSV file"""
     file_exists = osp.exists(log_path)
     
     with open(log_path, 'a', newline='') as f:
@@ -185,7 +189,6 @@ def save_training_log(log_path, epoch, train_mae, val_mae, test_mae, epoch_time,
                 'epoch_time_sec', 'learning_rate', 'is_best'
             ])
         
-        # Write metrics
         writer.writerow([
             datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             epoch,
@@ -197,9 +200,7 @@ def save_training_log(log_path, epoch, train_mae, val_mae, test_mae, epoch_time,
             is_best
         ])
 
-
-def test(model, loader, ema, device, use_precomputed=False, data_processor=None):
-    """Evaluate model on a dataset with progress bar"""
+def test(model, loader, ema, device, use_precomputed=True):
     mae = 0
     ema.assign(model)
     model.eval()
@@ -207,31 +208,12 @@ def test(model, loader, ema, device, use_precomputed=False, data_processor=None)
     pbar = tqdm(loader, desc="Evaluating", leave=False)
     
     with torch.no_grad():
-        for batch_item in pbar:
-            if use_precomputed:
-                data, unimol_embeddings = batch_item
-                data = data.to(device)
-                unimol_embeddings = unimol_embeddings.to(device)
-            else:
-                data = batch_item
-                data = data.to(device)
-                
-                smiles_list = data.smiles if hasattr(data, 'smiles') else []
-                
-                if len(smiles_list) == 0:
-                    continue
-                
-                unimol_result = data_processor.data_process_unimol(smiles_list)
-                unimol_embeddings = data_processor.extract_unimol_embeddings(unimol_result)
-                
-                if unimol_embeddings is None:
-                    continue
-                    
-                unimol_embeddings = unimol_embeddings.to(device)
+        for data, unimol_embeddings in pbar:
+            data = data.to(device)
+            unimol_embeddings = unimol_embeddings.to(device)
             
             output = model(data, unimol_embeddings)
             
-            # Ensure output and target have same shape
             target = data.y.view(-1)
             output = output.view(-1)
             
@@ -245,95 +227,47 @@ def test(model, loader, ema, device, use_precomputed=False, data_processor=None)
 
 
 def load_pamnet_checkpoint(checkpoint_path, config):
-    """
-    Load PAMNet model from checkpoint file (PyTorch .pt/.h5 format or actual HDF5)
-    """
-    print(f"Loading PAMNet from checkpoint: {checkpoint_path}")
-    
     model = PAMNet(config)
     
     try:
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-        print(f"Loaded as PyTorch checkpoint")
         
         if isinstance(checkpoint, dict):
             if 'model_state_dict' in checkpoint:
                 state_dict = checkpoint['model_state_dict']
-                print(f"Found 'model_state_dict' with {len(state_dict)} parameters")
             elif 'state_dict' in checkpoint:
                 state_dict = checkpoint['state_dict']
-                print(f"Found 'state_dict' with {len(state_dict)} parameters")
             else:
                 state_dict = checkpoint
-                print(f"Using entire checkpoint as state_dict ({len(state_dict)} parameters)")
         else:
-            print(f"ERROR: Checkpoint is not a dictionary")
             raise ValueError("Invalid checkpoint format")
         
-        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-        
-        if missing_keys:
-            print(f"Warning: {len(missing_keys)} keys missing from checkpoint")
-        if unexpected_keys:
-            print(f"Warning: {len(unexpected_keys)} unexpected keys in checkpoint")
-        
+        model.load_state_dict(state_dict, strict=False)
         return model
         
     except Exception as e:
-        print(f"Failed to load as PyTorch checkpoint: {e}")
-        print("Trying as HDF5 format...")
-        
-        try:
-            with h5py.File(checkpoint_path, 'r') as f:
-                print(f"HDF5 file contains {len(f.keys())} top-level keys")
-                
-                state_dict = {}
-                
-                def load_weights(name, obj):
-                    if isinstance(obj, h5py.Dataset):
-                        weight = torch.from_numpy(obj[()])
-                        state_dict[name] = weight
-                
-                f.visititems(load_weights)
-            
-            print(f"Loaded {len(state_dict)} parameters from HDF5")
-            
-            missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-            
-            if missing_keys:
-                print(f"Warning: {len(missing_keys)} keys missing from checkpoint")
-            if unexpected_keys:
-                print(f"Warning: {len(unexpected_keys)} unexpected keys in checkpoint")
-            
-            return model
-            
-        except Exception as e2:
-            print(f"Failed to load as HDF5: {e2}")
-            raise RuntimeError(f"Could not load checkpoint from {checkpoint_path}")
+        raise RuntimeError(f"Failed to load PAMNet from {checkpoint_path}: {e}")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--gpu', type=int, default=0, help='GPU number.')
-    parser.add_argument('--seed', type=int, default=480, help='Random seed.')
+    parser.add_argument('--gpu', type=int, default=0, help='GPU number')
+    parser.add_argument('--seed', type=int, default=480, help='Random seed')
     parser.add_argument('--dataset', type=str, default='QM9', help='Dataset to be used')
-    parser.add_argument('--model', type=str, default='PAMNet', choices=['PAMNet', 'PAMNet_s'])
-    parser.add_argument('--epochs', type=int, default=300, help='Number of epochs to train.')
-    parser.add_argument('--lr', type=float, default=1e-4, help='Initial learning rate.')
-    parser.add_argument('--wd', type=float, default=0, help='Weight decay (L2 loss).')
-    parser.add_argument('--n_layer', type=int, default=6, help='Number of hidden layers.')
-    parser.add_argument('--dim', type=int, default=128, help='Size of input hidden units.')
+    parser.add_argument('--epochs', type=int, default=300, help='Number of epochs to train')
+    parser.add_argument('--lr', type=float, default=5e-5, help='Initial learning rate')
+    parser.add_argument('--wd', type=float, default=0, help='Weight decay')
+    parser.add_argument('--n_layer', type=int, default=6, help='Number of hidden layers')
+    parser.add_argument('--dim', type=int, default=128, help='Size of input hidden units')
     parser.add_argument('--batch_size', type=int, default=32, help='batch_size')
     parser.add_argument('--target', type=int, default=7, help='Index of target for prediction')
     parser.add_argument('--cutoff_l', type=float, default=5.0, help='cutoff in local layer')
     parser.add_argument('--cutoff_g', type=float, default=5.0, help='cutoff in global layer')
-    parser.add_argument('--unimol_model', type=str, default='unimolv2', help='UniMol model name')
-    parser.add_argument('--unimol_size', type=str, default='84m', help='UniMol model size')
-    parser.add_argument('--use_precomputed', action='store_true', help='Use pre-computed UniMol embeddings')
-    parser.add_argument('--pamnet_checkpoint', type=str, default=None, 
-                       help='Path to pretrained PAMNet checkpoint file (.pt, .h5, .pth)')
+    parser.add_argument('--pamnet_checkpoint', type=str, default='best_model.h5', 
+                       help='Path to pretrained PAMNet checkpoint file')
     parser.add_argument('--freeze_pamnet', action='store_true',
-                       help='Freeze PAMNet weights during training (only train fusion layers)')
+                       help='Freeze PAMNet weights during training')
+    parser.add_argument('--patience', type=int, default=20, help='Early stopping patience')
     
     args = parser.parse_args()
 
@@ -341,6 +275,8 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.set_device(args.gpu)
     set_seed(args.seed)
+    
+    print(f"Simple Concatenation Training - Target: {args.target}, LR: {args.lr}, Freeze PAMNet: {args.freeze_pamnet}")
     
     class MyTransform(object):
         def __call__(self, data):
@@ -350,74 +286,39 @@ def main():
             data.y = data.y[:, target]
             return data
 
-    # ==================== LOAD DATASET ====================
-    print("Loading QM9 dataset...")
     path = osp.join('.', 'data', args.dataset)
-    dataset = QM9(path, transform=MyTransform())
+    dataset = QM9(path, transform=MyTransform()).shuffle()
 
     train_dataset = dataset[:110000]
     val_dataset = dataset[110000:120000]
     test_dataset = dataset[120000:]
 
-    # ==================== HANDLE EMBEDDINGS ====================
-    if args.use_precomputed:
-        emb_path = osp.join('.', 'data', args.dataset, 'precomputed', 'unimol_embeddings.pt')
-        
-        if not osp.exists(emb_path):
-            print(f"\nERROR: Pre-computed embeddings not found at {emb_path}")
-            print("Please run: python precompute_unimol_embeddings.py")
-            return
-        
-        print(f"Loading pre-computed embeddings from {emb_path}...")
-        emb_data = torch.load(emb_path)
-        all_embeddings = emb_data['embeddings']
-        print(f"Loaded embeddings: {all_embeddings.shape}")
-        
-        train_embeddings = all_embeddings[:110000]
-        val_embeddings = all_embeddings[110000:120000]
-        test_embeddings = all_embeddings[120000:]
-        
-        train_dataset = QM9WithEmbeddings(train_dataset, train_embeddings)
-        val_dataset = QM9WithEmbeddings(val_dataset, val_embeddings)
-        test_dataset = QM9WithEmbeddings(test_dataset, test_embeddings)
-        
-        unimol_dim = all_embeddings.shape[-1]
-        print(f"UniMol embedding dimension: {unimol_dim}")
-        
-        data_processor = None  
-        
-    else:
-        print("\nInitializing UniMol for on-the-fly embedding computation...")
-        print("Note: Training will be MUCH slower. Consider using --use_precomputed")
-        
-        data_processor = DataProcessing(
-            pamnet_model=None,
-            unimol_model=args.unimol_model,
-            unimol_model_size=args.unimol_size
-        )
-        
-        print("Determining UniMol embedding dimension...")
-        sample_result = data_processor.data_process_unimol(["CCO"])
-        sample_emb = data_processor.extract_unimol_embeddings(sample_result)
-        unimol_dim = sample_emb.shape[-1]
-        print(f"UniMol embedding dimension: {unimol_dim}")
-
-    if args.use_precomputed:
-        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, 
-                                 collate_fn=collate_with_embeddings)
-        test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False,
-                                collate_fn=collate_with_embeddings)
-        val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
-                               collate_fn=collate_with_embeddings)
-    else:
-        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-        test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
-        val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+    emb_path = osp.join('.', 'data', args.dataset, 'precomputed', 'unimol_embeddings.pt')
     
-    print(f"Data loaded! Train: {len(train_dataset)}, Val: {len(val_dataset)}, Test: {len(test_dataset)}")
+    if not osp.exists(emb_path):
+        print(f"ERROR: Pre-computed embeddings not found at {emb_path}")
+        return
+    
+    emb_data = torch.load(emb_path)
+    all_embeddings = emb_data['embeddings']
+    
+    train_embeddings = all_embeddings[:110000]
+    val_embeddings = all_embeddings[110000:120000]
+    test_embeddings = all_embeddings[120000:]
+    
+    unimol_dim = all_embeddings.shape[-1]
+    
+    train_dataset = QM9WithEmbeddings(train_dataset, train_embeddings)
+    val_dataset = QM9WithEmbeddings(val_dataset, val_embeddings)
+    test_dataset = QM9WithEmbeddings(test_dataset, test_embeddings)
+    
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, 
+                             collate_fn=collate_with_embeddings)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False,
+                            collate_fn=collate_with_embeddings)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
+                           collate_fn=collate_with_embeddings)
 
-    # ==================== INITIALIZE MODELS ====================
-    print("\nInitializing PAMNet...")
     config = Config(
         dataset=args.dataset, 
         dim=args.dim, 
@@ -426,46 +327,28 @@ def main():
         cutoff_g=args.cutoff_g
     )
     
-    if args.pamnet_checkpoint is not None:
-        print(f"Loading pretrained PAMNet from {args.pamnet_checkpoint}...")
-        try:
-            pamnet_model = load_pamnet_checkpoint(args.pamnet_checkpoint, config)
-            print(f"Successfully loaded pretrained PAMNet!")
-        except Exception as e:
-            print(f"ERROR loading pretrained PAMNet: {e}")
-            import traceback
-            traceback.print_exc()
-            print("\nFalling back to fresh PAMNet initialization...")
-            if args.model == 'PAMNet':
-                pamnet_model = PAMNet(config)
-            else:
-                pamnet_model = PAMNet_s(config)
-    else:
-        if args.model == 'PAMNet':
-            pamnet_model = PAMNet(config)
-        else:
-            pamnet_model = PAMNet_s(config)
+    if not osp.exists(args.pamnet_checkpoint):
+        print(f"ERROR: PAMNet checkpoint not found at {args.pamnet_checkpoint}")
+        return
     
-    print(f"PAMNet initialized with {count_parameters(pamnet_model)} parameters")
+    try:
+        pamnet_model = load_pamnet_checkpoint(args.pamnet_checkpoint, config)
+    except Exception as e:
+        print(f"ERROR loading pretrained PAMNet: {e}")
+        return
     
-    print("\nCreating hybrid model...")
     model = SimpleHybridModel(pamnet_model, unimol_dim=unimol_dim, freeze_pamnet=args.freeze_pamnet).to(device)
     
-    total_params = count_parameters(model)
-    pamnet_params = count_parameters(pamnet_model)
-    fusion_params = total_params - pamnet_params
+    trainable_params = count_parameters(model)
     
-    if args.freeze_pamnet:
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"Total parameters: {total_params:,}")
-        print(f"  - PAMNet (frozen): {pamnet_params:,}")
-        print(f"  - Fusion layers (trainable): {trainable_params:,}")
-    else:
-        print(f"Total parameters: {total_params:,}")
-        print(f"  - PAMNet: {pamnet_params:,}")
-        print(f"  - Fusion layers: {fusion_params:,}")
+    sample_targets = []
+    for i in range(min(10000, len(train_dataset))):
+        sample_targets.append(train_dataset[i][0].y.item())
+    target_mean = torch.tensor(sample_targets).mean().item()
+    model.set_output_bias(target_mean)
     
-    # ==================== SETUP TRAINING ====================
+    print(f"Model: {trainable_params:,} trainable parameters")
+    
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd, amsgrad=False)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9961697)
     scheduler_warmup = GradualWarmupScheduler(
@@ -480,47 +363,14 @@ def main():
     save_folder = osp.join(".", "save", args.dataset + "_simple")
     if not osp.exists(save_folder):
         os.makedirs(save_folder)
-
-    # ==================== TRAINING LOOP ====================
-    print("\n" + "="*50)
-    print("Starting training!")
-    if args.use_precomputed:
-        print("Using PRE-COMPUTED embeddings (FAST)")
-    else:
-        print("Computing embeddings ON-THE-FLY (SLOW)")
-    print("="*50)
     
     log_path = osp.join(save_folder, f"training_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-    print(f"Logging training metrics to: {log_path}\n")
     
-    print("DEBUG: Checking first batch...")
-    for batch_item in train_loader:
-        if args.use_precomputed:
-            data, unimol_embeddings = batch_item
-        else:
-            data = batch_item
-        data = data.to(device)
-        if args.use_precomputed:
-            unimol_embeddings = unimol_embeddings.to(device)
-        
-        print(f"  Batch size: {data.num_graphs}")
-        print(f"  Target y shape: {data.y.shape}")
-        print(f"  Target y range: [{data.y.min():.4f}, {data.y.max():.4f}]")
-        print(f"  Target y mean: {data.y.mean():.4f}")
-        
-        with torch.no_grad():
-            pamnet_out = model.pamnet_model(data)
-            print(f"  PAMNet output shape: {pamnet_out.shape}")
-            print(f"  PAMNet output range: [{pamnet_out.min():.4f}, {pamnet_out.max():.4f}]")
-            
-            output = model(data, unimol_embeddings)
-            print(f"  Final output shape: {output.shape}")
-            print(f"  Final output range: [{output.min():.4f}, {output.max():.4f}]")
-        break
-    print("")
+    print(f"Starting training for {args.epochs} epochs\n")
     
     best_val_loss = None
     test_loss = None
+    patience_counter = 0
     
     for epoch in range(args.epochs):
         epoch_start_time = time.time()
@@ -530,33 +380,14 @@ def main():
         
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
         
-        for batch_item in pbar:
-            if args.use_precomputed:
-                data, unimol_embeddings = batch_item
-                data = data.to(device)
-                unimol_embeddings = unimol_embeddings.to(device)
-            else:
-                data = batch_item
-                data = data.to(device)
-                
-                smiles_list = data.smiles if hasattr(data, 'smiles') else []
-                
-                if len(smiles_list) == 0:
-                    continue
-                
-                unimol_result = data_processor.data_process_unimol(smiles_list)
-                unimol_embeddings = data_processor.extract_unimol_embeddings(unimol_result)
-                
-                if unimol_embeddings is None:
-                    continue
-                    
-                unimol_embeddings = unimol_embeddings.to(device)
+        for data, unimol_embeddings in pbar:
+            data = data.to(device)
+            unimol_embeddings = unimol_embeddings.to(device)
             
             optimizer.zero_grad()
             
             output = model(data, unimol_embeddings)
             
-            # Ensure shapes match
             target = data.y.view(-1)
             output = output.view(-1)
             
@@ -564,7 +395,7 @@ def main():
             loss_all += loss.item() * data.num_graphs
             
             loss.backward()
-            clip_grad_norm_(model.parameters(), max_norm=1000, norm_type=2)
+            clip_grad_norm_(model.parameters(), max_norm=10.0, norm_type=2)
             optimizer.step()
 
             curr_epoch = epoch + float(step) / (len(train_dataset) / args.batch_size)
@@ -577,17 +408,18 @@ def main():
                 'loss': f'{loss.item():.4f}',
                 'lr': f'{optimizer.param_groups[0]["lr"]:.2e}'
             })
-            
-        train_loss = loss_all / len(train_loader.dataset)
-        val_loss = test(model, val_loader, ema, device, args.use_precomputed, data_processor)
+        
+        train_loss_ema = test(model, train_loader, ema, device)
+        val_loss = test(model, val_loader, ema, device)
         epoch_time = time.time() - epoch_start_time
         current_lr = optimizer.param_groups[0]['lr']
         
         is_best = False
         if best_val_loss is None or val_loss <= best_val_loss:
-            test_loss = test(model, test_loader, ema, device, args.use_precomputed, data_processor)
+            test_loss = test(model, test_loader, ema, device)
             best_val_loss = val_loss
             is_best = True
+            patience_counter = 0
             
             torch.save({
                 'epoch': epoch,
@@ -597,11 +429,17 @@ def main():
                 'test_loss': test_loss,
                 'config': vars(args),
             }, osp.join(save_folder, "best_simple_model.pt"))
+        else:
+            patience_counter += 1
+        
+        if patience_counter >= args.patience:
+            print(f"\nEarly stopping after {epoch+1} epochs (no improvement for {args.patience} epochs)")
+            break
         
         save_training_log(
             log_path, 
             epoch + 1, 
-            train_loss, 
+            train_loss_ema, 
             val_loss, 
             test_loss if test_loss is not None else 0.0,
             epoch_time,
@@ -610,17 +448,16 @@ def main():
         )
 
         print(f'Epoch {epoch+1:03d} [{epoch_time:.1f}s]: '
-              f'Train MAE: {train_loss:.7f}, Val MAE: {val_loss:.7f}, '
-              f'Test MAE: {test_loss:.7f}' + (' BEST!' if is_best else ''))
+              f'Train: {train_loss_ema:.4f}, Val: {val_loss:.4f}, '
+              f'Test: {test_loss:.4f}' + (' 🌟' if is_best else ''))
     
-    # ==================== FINAL RESULTS ====================
-    print("\n" + "="*50)
-    print("Training completed!")
-    print("="*50)
-    print(f'Best Validation MAE: {best_val_loss:.7f}')
-    print(f'Final Test MAE: {test_loss:.7f}')
-    print(f'\nTraining log saved to: {log_path}')
-    print(f'Best model saved to: {osp.join(save_folder, "best_simple_model.pt")}')
+    print(f"\n{'='*70}")
+    print(f"Training completed!")
+    print(f"Best Validation MAE: {best_val_loss:.6f}")
+    print(f"Final Test MAE: {test_loss:.6f}")
+    print(f"Log: {log_path}")
+    print(f"Model: {osp.join(save_folder, 'best_simple_model.pt')}")
+    print(f"{'='*70}")
 
 
 if __name__ == "__main__":
