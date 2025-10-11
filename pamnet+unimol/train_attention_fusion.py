@@ -15,6 +15,7 @@ import csv
 import time
 from datetime import datetime
 import h5py
+from torch_geometric.data import Batch
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 pamnet_dir = os.path.join(os.path.dirname(current_dir), "Physics-aware-Multiplex-GNN")
@@ -31,7 +32,6 @@ from hybrid_model import Hybrid_Model
 
 
 class QM9WithEmbeddings(torch.utils.data.Dataset):
-    """Dataset wrapper that pairs QM9 graphs with pre-computed UniMol embeddings"""
     
     def __init__(self, qm9_dataset, embeddings):
         self.qm9_dataset = qm9_dataset
@@ -45,8 +45,6 @@ class QM9WithEmbeddings(torch.utils.data.Dataset):
 
 
 def collate_with_embeddings(batch):
-    """Custom collate function to handle (data, embedding) tuples"""
-    from torch_geometric.data import Batch
     
     data_list, embeddings = zip(*batch)
     batched_data = Batch.from_data_list(data_list)
@@ -56,7 +54,6 @@ def collate_with_embeddings(batch):
 
 
 def set_seed(seed):
-    """Set random seeds for reproducibility"""
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.manual_seed(seed)
@@ -66,12 +63,10 @@ def set_seed(seed):
 
 
 def count_parameters(model):
-    """Count trainable parameters"""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 def save_training_log(log_path, epoch, train_mae, val_mae, test_mae, epoch_time, lr, is_best=False):
-    """Save training metrics to CSV file"""
     file_exists = osp.exists(log_path)
     
     with open(log_path, 'a', newline='') as f:
@@ -96,7 +91,6 @@ def save_training_log(log_path, epoch, train_mae, val_mae, test_mae, epoch_time,
 
 
 def test(model, loader, ema, device):
-    """Evaluate model on a dataset"""
     mae = 0
     ema.assign(model)
     model.eval()
@@ -123,42 +117,28 @@ def test(model, loader, ema, device):
 
 
 def load_pamnet_checkpoint(checkpoint_path, config):
-    """Load PAMNet model from checkpoint file)"""
     print(f"Loading PAMNet from checkpoint: {checkpoint_path}")
     
     model = PAMNet(config)
     
     try:
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-        print(f"Loaded as PyTorch checkpoint")
         
         if isinstance(checkpoint, dict):
             if 'model_state_dict' in checkpoint:
                 state_dict = checkpoint['model_state_dict']
-                print(f"Found 'model_state_dict' with {len(state_dict)} parameters")
             elif 'state_dict' in checkpoint:
                 state_dict = checkpoint['state_dict']
-                print(f"Found 'state_dict' with {len(state_dict)} parameters")
             else:
                 state_dict = checkpoint
-                print(f"Using entire checkpoint as state_dict ({len(state_dict)} parameters)")
         else:
-            print(f"ERROR: Checkpoint is not a dictionary")
             raise ValueError("Invalid checkpoint format")
         
         missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
         
-        if missing_keys:
-            print(f"Warning: {len(missing_keys)} keys missing from checkpoint")
-        if unexpected_keys:
-            print(f"Warning: {len(unexpected_keys)} unexpected keys in checkpoint")
-        
         return model
         
     except Exception as e:
-        print(f"Failed to load as PyTorch checkpoint: {e}")
-        print("Trying as HDF5 format...")
-        
         try:
             with h5py.File(checkpoint_path, 'r') as f:
                 print(f"HDF5 file contains {len(f.keys())} top-level keys")
@@ -172,40 +152,30 @@ def load_pamnet_checkpoint(checkpoint_path, config):
                 
                 f.visititems(load_weights)
             
-            print(f"Loaded {len(state_dict)} parameters from HDF5")
-            
             missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-            
-            if missing_keys:
-                print(f"Warning: {len(missing_keys)} keys missing from checkpoint")
-            if unexpected_keys:
-                print(f"Warning: {len(unexpected_keys)} unexpected keys in checkpoint")
-            
             return model
             
         except Exception as e2:
-            print(f"Failed to load as HDF5: {e2}")
             raise RuntimeError(f"Could not load checkpoint from {checkpoint_path}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Train attention fusion model with frozen PAMNet')
+    parser = argparse.ArgumentParser(description='Train attention fusion model')
     parser.add_argument('--gpu', type=int, default=0, help='GPU number')
     parser.add_argument('--seed', type=int, default=480, help='Random seed')
     parser.add_argument('--dataset', type=str, default='QM9', help='Dataset name')
     parser.add_argument('--epochs', type=int, default=300, help='Number of epochs to train')
-    parser.add_argument('--lr', type=float, default=5e-5, help='Initial learning rate (higher for unfrozen PAMNet)')
-    parser.add_argument('--wd', type=float, default=0, help='Weight decay (L2 loss)')
+    parser.add_argument('--lr', type=float, default=5e-5, help='Initial learning rate')
+    parser.add_argument('--wd', type=float, default=0, help='Weight decay')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
-    parser.add_argument('--target', type=int, default=7, help='Index of target for prediction')
+    parser.add_argument('--target', type=int, default=7, help='Target property index')
     parser.add_argument('--fusion_dim', type=int, default=128, help='Fusion layer dimension')
     parser.add_argument('--num_heads', type=int, default=2, help='Number of attention heads')
     parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
     parser.add_argument('--pamnet_checkpoint', type=str, default='best_model.h5',
-                       help='Path to pretrained PAMNet checkpoint')
+                       help='Path to pretrained PAMNet checkpoint (.h5)')
     parser.add_argument('--freeze_pamnet', action='store_true',
-                       help='Freeze PAMNet weights (default: False - finetune PAMNet)')
-    
+                       help='Freeze PAMNet weights (default: False)')
     parser.add_argument('--n_layer', type=int, default=6, help='Number of PAMNet layers')
     parser.add_argument('--dim', type=int, default=128, help='PAMNet hidden dimension')
     parser.add_argument('--cutoff_l', type=float, default=5.0, help='PAMNet local cutoff')
@@ -219,17 +189,7 @@ def main():
         torch.cuda.set_device(args.gpu)
     set_seed(args.seed)
     
-    print("="*70)
-    print("ATTENTION FUSION MODEL TRAINING")
-    print("="*70)
-    print(f"Device: {device}")
-    print(f"Target property: {args.target}")
-    print(f"PAMNet checkpoint: {args.pamnet_checkpoint}")
-    if args.freeze_pamnet:
-        print(f"PAMNet will be FROZEN (only fusion layers trained)")
-    else:
-        print(f"PAMNet will be FINETUNED (end-to-end training)")
-    print("="*70)
+    print(f"Attention Fusion Training - Target: {args.target}, LR: {args.lr}, Freeze PAMNet: {args.freeze_pamnet}")
     
     class MyTransform(object):
         def __call__(self, data):
@@ -239,34 +199,27 @@ def main():
             data.y = data.y[:, target]
             return data
 
-    print("\nLoading QM9 dataset...")
     path = osp.join('.', 'data', args.dataset)
-    dataset = QM9(path, transform=MyTransform())
+    dataset = QM9(path, transform=MyTransform()).shuffle()
 
     train_dataset = dataset[:110000]
     val_dataset = dataset[110000:120000]
     test_dataset = dataset[120000:]
-    
-    print(f"Dataset splits - Train: {len(train_dataset)}, Val: {len(val_dataset)}, Test: {len(test_dataset)}")
 
     emb_path = osp.join('.', 'data', args.dataset, 'precomputed', 'unimol_embeddings.pt')
     
     if not osp.exists(emb_path):
-        print(f"\nERROR: Pre-computed embeddings not found at {emb_path}")
-        print("Please run: python precompute_unimol_embeddings.py")
+        print(f"ERROR: Pre-computed embeddings not found at {emb_path}")
         return
     
-    print(f"\nLoading pre-computed UniMol embeddings from {emb_path}...")
     emb_data = torch.load(emb_path)
     all_embeddings = emb_data['embeddings']
-    print(f"Loaded embeddings: {all_embeddings.shape}")
     
     train_embeddings = all_embeddings[:110000]
     val_embeddings = all_embeddings[110000:120000]
     test_embeddings = all_embeddings[120000:]
     
     unimol_dim = all_embeddings.shape[-1]
-    print(f"UniMol embedding dimension: {unimol_dim}")
     
     train_dataset = QM9WithEmbeddings(train_dataset, train_embeddings)
     val_dataset = QM9WithEmbeddings(val_dataset, val_embeddings)
@@ -279,10 +232,9 @@ def main():
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False,
                             collate_fn=collate_with_embeddings)
 
-    # ==================== LOAD PRETRAINED PAMNET ====================
-    print("\n" + "="*70)
-    print("Loading pretrained PAMNet...")
-    print("="*70)
+    if not osp.exists(args.pamnet_checkpoint):
+        print(f"ERROR: PAMNet checkpoint not found at {args.pamnet_checkpoint}")
+        return
     
     config = Config(
         dataset=args.dataset,
@@ -292,120 +244,38 @@ def main():
         cutoff_g=args.cutoff_g
     )
     
-    if not osp.exists(args.pamnet_checkpoint):
-        print(f"ERROR: PAMNet checkpoint not found at {args.pamnet_checkpoint}")
-        return
-    
     try:
         pamnet_model = load_pamnet_checkpoint(args.pamnet_checkpoint, config)
-        print(f"✓ Successfully loaded pretrained PAMNet!")
-        print(f"  PAMNet parameters: {count_parameters(pamnet_model):,}")
     except Exception as e:
-        print(f"ERROR loading pretrained PAMNet: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"ERROR loading PAMNet: {e}")
         return
 
-    # ==================== CREATE ATTENTION FUSION MODEL ====================
-    print("\n" + "="*70)
-    print("Creating attention fusion model...")
-    print("="*70)
-    
     model = Hybrid_Model(
         pamnet_model=pamnet_model,
         unimol_dim=unimol_dim,
         fusion_dim=args.fusion_dim,
         num_heads=args.num_heads,
         dropout=args.dropout,
-        freeze_pamnet=args.freeze_pamnet  # Now respects command line arg
+        freeze_pamnet=args.freeze_pamnet
     ).to(device)
     
-    total_params = sum(p.numel() for p in model.parameters())
     trainable_params = count_parameters(model)
-    frozen_params = total_params - trainable_params
     
-    print(f"\nModel parameters:")
-    print(f"  Total: {total_params:,}")
-    print(f"  Trainable: {trainable_params:,}")
-    if frozen_params > 0:
-        print(f"  Frozen: {frozen_params:,}")
-        print(f"  Percentage trainable: {100*trainable_params/total_params:.1f}%")
-    else:
-        print(f"  All parameters are trainable (end-to-end training)")
-    
-    # ==================== DIAGNOSTICS ====================
-    print("\n" + "="*70)
-    print("DATA DIAGNOSTICS")
-    print("="*70)
-    
-    # Check target value ranges
-    print("Computing target statistics...")
+    # Initialize output bias to target mean
     sample_targets = []
     for i in range(min(10000, len(train_dataset))):
         sample_targets.append(train_dataset[i][0].y.item())
-    sample_targets = torch.tensor(sample_targets)
-    
-    target_mean = sample_targets.mean().item()
-    target_std = sample_targets.std().item()
-    
-    print(f"Target statistics (first {len(sample_targets)} samples):")
-    print(f"  Min: {sample_targets.min():.6f}")
-    print(f"  Max: {sample_targets.max():.6f}")
-    print(f"  Mean: {target_mean:.6f}")
-    print(f"  Std: {target_std:.6f}")
-    
-    # Initialize output bias to target mean for better starting point
-    print("\n" + "="*70)
-    print("INITIALIZING OUTPUT LAYER")
-    print("="*70)
+    target_mean = torch.tensor(sample_targets).mean().item()
     model.set_output_bias(target_mean)
-    print("  This helps the model start with reasonable predictions!")
     
-    # Test model predictions before training
-    print("\n" + "="*70)
-    print("TESTING INITIAL MODEL STATE")
-    print("="*70)
-    
-    model.eval()
-    with torch.no_grad():
-        test_batch = next(iter(train_loader))
-        data, unimol_emb = test_batch
-        data = data.to(device)
-        unimol_emb = unimol_emb.to(device)
-        
-        # Extract PAMNet features
-        pamnet_features = model.extract_pamnet_features(data)
-        print(f"PAMNet features shape: {pamnet_features.shape}")
-        print(f"PAMNet features mean: {pamnet_features.mean():.6f}")
-        print(f"PAMNet features std: {pamnet_features.std():.6f}")
-        
-        # Get fusion model predictions
-        fusion_output = model(data, unimol_emb)
-        print(f"\nFusion output shape: {fusion_output.shape}")
-        print(f"Fusion output mean: {fusion_output.mean():.6f}")
-        print(f"Fusion output std: {fusion_output.std():.6f}")
-        
-        # Compare to actual targets
-        targets = data.y.view(-1)
-        print(f"\nActual targets mean: {targets.mean():.6f}")
-        print(f"Actual targets std: {targets.std():.6f}")
-        
-        mae = (fusion_output - targets).abs().mean()
-        print(f"\nInitial MAE on first batch: {mae:.6f}")
-    
-    print("="*70)
-    model.train()
+    print(f"Model: {trainable_params:,} trainable parameters")
 
-    print("\n" + "="*70)
-    print("Setting up optimizer and scheduler...")
-    print("="*70)
-    
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd, amsgrad=False)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9961697)
     scheduler_warmup = GradualWarmupScheduler(
         optimizer,
         multiplier=1.0,
-        total_epoch=5,  # Longer warmup for better stability
+        total_epoch=1,
         after_scheduler=scheduler
     )
 
@@ -416,16 +286,8 @@ def main():
         os.makedirs(save_folder)
     
     log_path = osp.join(save_folder, f"training_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-    print(f"Training log will be saved to: {log_path}")
-
-    print("\n" + "="*70)
-    print("STARTING TRAINING")
-    print("="*70)
-    print(f"Epochs: {args.epochs}")
-    print(f"Batch size: {args.batch_size}")
-    print(f"Learning rate: {args.lr}")
-    print(f"Using PRE-COMPUTED embeddings")
-    print("="*70 + "\n")
+    
+    print(f"Starting training for {args.epochs} epochs\n")
     
     best_val_loss = None
     test_loss = None
@@ -454,7 +316,7 @@ def main():
             loss_all += loss.item() * data.num_graphs
             
             loss.backward()
-            clip_grad_norm_(model.parameters(), max_norm=10.0, norm_type=2) 
+            clip_grad_norm_(model.parameters(), max_norm=10.0, norm_type=2)
             optimizer.step()
 
             curr_epoch = epoch + float(step) / (len(train_dataset) / args.batch_size)
@@ -468,7 +330,7 @@ def main():
                 'lr': f'{optimizer.param_groups[0]["lr"]:.2e}'
             })
             
-        train_loss = loss_all / len(train_loader.dataset)
+        train_loss_ema = test(model, train_loader, ema, device)
         val_loss = test(model, val_loader, ema, device)
         epoch_time = time.time() - epoch_start_time
         current_lr = optimizer.param_groups[0]['lr']
@@ -478,7 +340,7 @@ def main():
             test_loss = test(model, test_loader, ema, device)
             best_val_loss = val_loss
             is_best = True
-            patience_counter = 0  # Reset patience counter
+            patience_counter = 0
             
             torch.save({
                 'epoch': epoch,
@@ -492,16 +354,13 @@ def main():
             patience_counter += 1
             
         if patience_counter >= args.patience:
-            print(f"\n{'='*70}")
-            print(f"Early stopping triggered after {epoch+1} epochs")
-            print(f"No improvement for {args.patience} consecutive epochs")
-            print(f"{'='*70}")
+            print(f"\nEarly stopping after {epoch+1} epochs (no improvement for {args.patience} epochs)")
             break
         
         save_training_log(
             log_path,
             epoch + 1,
-            train_loss,
+            train_loss_ema,
             val_loss,
             test_loss if test_loss is not None else 0.0,
             epoch_time,
@@ -510,18 +369,16 @@ def main():
         )
 
         print(f'Epoch {epoch+1:03d} [{epoch_time:.1f}s]: '
-              f'Train MAE: {train_loss:.7f}, Val MAE: {val_loss:.7f}, '
-              f'Test MAE: {test_loss:.7f}' + (' 🌟 BEST!' if is_best else ''))
+              f'Train: {train_loss_ema:.4f}, Val: {val_loss:.4f}, '
+              f'Test: {test_loss:.4f}' + (' 🌟' if is_best else ''))
     
-    # ==================== FINAL RESULTS ====================
-    print("\n" + "="*70)
-    print("TRAINING COMPLETED!")
-    print("="*70)
-    print(f'Best Validation MAE: {best_val_loss:.7f}')
-    print(f'Final Test MAE: {test_loss:.7f}')
-    print(f'\nTraining log: {log_path}')
-    print(f'Best model: {osp.join(save_folder, "best_attention_fusion.pt")}')
-    print("="*70)
+    print(f"\n{'='*70}")
+    print(f"Training completed!")
+    print(f"Best Validation MAE: {best_val_loss:.6f}")
+    print(f"Final Test MAE: {test_loss:.6f}")
+    print(f"Log: {log_path}")
+    print(f"Model: {osp.join(save_folder, 'best_attention_fusion.pt')}")
+    print(f"{'='*70}")
 
 
 if __name__ == "__main__":
