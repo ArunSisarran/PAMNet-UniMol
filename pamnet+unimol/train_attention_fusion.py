@@ -28,7 +28,7 @@ from ema import EMA
 sys.path.append(os.path.join(pamnet_dir, "datasets"))
 from qm9_dataset import QM9
 
-from hybrid_model import Hybrid_Model
+from attention_fusion_model import Hybrid_Model
 
 
 class QM9WithEmbeddings(torch.utils.data.Dataset):
