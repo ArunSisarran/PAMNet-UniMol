@@ -19,40 +19,37 @@ class Hybrid_Model(nn.Module):
         
         pamnet_dim = pamnet_model.dim  
         
-        self.pamnet_proj = nn.Linear(pamnet_dim, fusion_dim)
-        self.unimol_proj = nn.Linear(unimol_dim, fusion_dim)
+        self.pamnet_proj = nn.Linear(pamnet_dim, fusion_dim * 2)
+        self.unimol_proj = nn.Linear(unimol_dim, fusion_dim * 2)
         
         self.cross_attn_p2u = nn.MultiheadAttention(
-            embed_dim=fusion_dim,
+            embed_dim=fusion_dim * 2,
             num_heads=num_heads,
             dropout=dropout,
             batch_first=True
         )
         
         self.cross_attn_u2p = nn.MultiheadAttention(
-            embed_dim=fusion_dim,
+            embed_dim=fusion_dim * 2,
             num_heads=num_heads,
             dropout=dropout,
             batch_first=True
         )
         
-        self.norm1 = nn.LayerNorm(fusion_dim)
-        self.norm2 = nn.LayerNorm(fusion_dim)
-        self.norm3 = nn.LayerNorm(fusion_dim * 2)
+        self.norm1 = nn.LayerNorm(fusion_dim * 2)
+        self.norm2 = nn.LayerNorm(fusion_dim * 2)
+        self.norm3 = nn.LayerNorm(fusion_dim * 4)
         
         self.ffn = nn.Sequential(
-            nn.Linear(fusion_dim * 2, fusion_dim * 2),
+            nn.Linear(fusion_dim * 4, fusion_dim * 4),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(fusion_dim * 2, fusion_dim * 2),
+            nn.Linear(fusion_dim * 4, fusion_dim * 4),
             nn.Dropout(dropout)
         )
         
         self.predictor = nn.Sequential(
-            nn.Linear(fusion_dim * 2, fusion_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(fusion_dim, 128),
+            nn.Linear(fusion_dim * 4, 128),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(128, 1)
@@ -61,11 +58,19 @@ class Hybrid_Model(nn.Module):
         self._init_predictor_weights()
         
         self.dropout = nn.Dropout(dropout)
+
+        self.pamnet_node_features = None
+        self._setup_feature_hook()
+
+    def _setup_feature_hook(self):
+        def hook_fn(module, input, output):
+            self.pamnet_node_features = output[0]
+        self.pamnet_model.local_layer[-1].register_forward_hook(hook_fn)
     
     def _init_predictor_weights(self):
-        for i, module in enumerate(self.predictor.modules()):
+        for module in self.predictor.modules():
             if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight, gain=0.1)
+                nn.init.kaiming_uniform_(module.weight, nonlinearity='relu')
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
     
@@ -123,23 +128,28 @@ class Hybrid_Model(nn.Module):
             x, _, _ = self.pamnet_model.local_layer[layer](x, edge_attr_rbf_l, edge_attr_sbf2, edge_attr_sbf1,
                                                             idx_kj, idx_ji, idx_jj_pair, idx_ji_pair, edge_index_l)
         
-        pamnet_features = global_add_pool(x, batch)  # (batch, 128)
+        return x, data.batch
+        #pamnet_features = global_add_pool(x, batch)  # (batch, 128)
         
-        return pamnet_features
+        #return pamnet_features
 
     def forward(self, graph_data, unimol_embeddings, return_attention=False):
 
         if self.freeze_pamnet:
             with torch.no_grad():
-                pamnet_features = self.extract_pamnet_features(graph_data)
+                _ = self.pamnet_model(graph_data)
         else:
-            pamnet_features = self.extract_pamnet_features(graph_data)
+            _ = self.pamnet_model(graph_data)
+
+        pamnet_node_features = self.pamnet_node_features
+        batch = graph_data.batch
         
         if unimol_embeddings.dim() == 1:
             unimol_embeddings = unimol_embeddings.unsqueeze(0)
         
-        pamnet_proj = self.pamnet_proj(pamnet_features)  
-        unimol_proj = self.unimol_proj(unimol_embeddings)  
+        pamnet_proj = self.pamnet_proj(pamnet_node_features)  
+        unimol_expanded = unimol_embeddings[batch]
+        unimol_proj = self.unimol_proj(unimol_expanded)  
         
         pamnet_seq = pamnet_proj.unsqueeze(1)  
         unimol_seq = unimol_proj.unsqueeze(1)  
@@ -151,7 +161,7 @@ class Hybrid_Model(nn.Module):
             need_weights=return_attention
         )
         pamnet_attended = self.norm1(pamnet_seq + self.dropout(pamnet_attended))
-        
+
         unimol_attended, attn_u2p = self.cross_attn_u2p(
             query=unimol_seq,
             key=pamnet_seq,
@@ -166,8 +176,9 @@ class Hybrid_Model(nn.Module):
         fused = torch.cat([pamnet_attended, unimol_attended], dim=-1)  
         
         fused = self.norm3(fused + self.ffn(fused))
+        fused_pooled = global_add_pool(fused, batch)
         
-        output = self.predictor(fused).squeeze(-1)  
+        output = self.predictor(fused_pooled).squeeze(-1)  
         
         if return_attention:
             attention_info = {

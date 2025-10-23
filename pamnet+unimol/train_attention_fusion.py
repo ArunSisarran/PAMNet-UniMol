@@ -10,9 +10,7 @@ import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 from torch_geometric.data import DataLoader
 from warmup_scheduler import GradualWarmupScheduler
-from tqdm import tqdm
 import csv
-import time
 from datetime import datetime
 import h5py
 from torch_geometric.data import Batch
@@ -66,7 +64,7 @@ def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-def save_training_log(log_path, epoch, train_mae, val_mae, test_mae, epoch_time, lr, is_best=False):
+def save_training_log(log_path, epoch, train_mae, val_mae, test_mae, lr, is_best=False):
     file_exists = osp.exists(log_path)
     
     with open(log_path, 'a', newline='') as f:
@@ -75,7 +73,7 @@ def save_training_log(log_path, epoch, train_mae, val_mae, test_mae, epoch_time,
         if not file_exists:
             writer.writerow([
                 'timestamp', 'epoch', 'train_mae', 'val_mae', 'test_mae', 
-                'epoch_time_sec', 'learning_rate', 'is_best'
+                'learning_rate', 'is_best'
             ])
         
         writer.writerow([
@@ -84,7 +82,6 @@ def save_training_log(log_path, epoch, train_mae, val_mae, test_mae, epoch_time,
             f'{train_mae:.7f}',
             f'{val_mae:.7f}',
             f'{test_mae:.7f}',
-            f'{epoch_time:.2f}',
             f'{lr:.8f}',
             is_best
         ])
@@ -93,24 +90,16 @@ def save_training_log(log_path, epoch, train_mae, val_mae, test_mae, epoch_time,
 def test(model, loader, ema, device):
     mae = 0
     ema.assign(model)
-    model.eval()
-    
-    pbar = tqdm(loader, desc="Evaluating", leave=False)
-    
-    with torch.no_grad():
-        for data, unimol_embeddings in pbar:
-            data = data.to(device)
-            unimol_embeddings = unimol_embeddings.to(device)
-            
-            output = model(data, unimol_embeddings)
-            
-            target = data.y.view(-1)
-            output = output.view(-1)
-            
-            batch_mae = (output - target).abs().sum().item()
-            mae += batch_mae
-            
-            pbar.set_postfix({'MAE': f'{batch_mae/len(target):.4f}'})
+    for data, unimol_embeddings in loader:
+        data = data.to(device)
+        unimol_embeddings = unimol_embeddings.to(device)
+        
+        output = model(data, unimol_embeddings)
+        
+        target = data.y.view(-1)
+        output = output.view(-1)
+        
+        mae += (output - target).abs().sum().item()
     
     ema.resume(model)
     return mae / len(loader.dataset)
@@ -231,6 +220,7 @@ def main():
                            collate_fn=collate_with_embeddings)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False,
                             collate_fn=collate_with_embeddings)
+    print("Data loaded!")
 
     if not osp.exists(args.pamnet_checkpoint):
         print(f"ERROR: PAMNet checkpoint not found at {args.pamnet_checkpoint}")
@@ -268,7 +258,7 @@ def main():
     target_mean = torch.tensor(sample_targets).mean().item()
     model.set_output_bias(target_mean)
     
-    print(f"Model: {trainable_params:,} trainable parameters")
+    print(f"Number of model parameters: {trainable_params:,}")
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd, amsgrad=False)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9961697)
@@ -287,20 +277,18 @@ def main():
     
     log_path = osp.join(save_folder, f"training_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
     
-    print(f"Starting training for {args.epochs} epochs\n")
+    print("Start training!")
     
     best_val_loss = None
     test_loss = None
     patience_counter = 0
     
     for epoch in range(args.epochs):
-        epoch_start_time = time.time()
         loss_all = 0
         step = 0
         model.train()
         
-        
-        for data, unimol_embeddings in pbar:
+        for data, unimol_embeddings in train_loader:
             data = data.to(device)
             unimol_embeddings = unimol_embeddings.to(device)
             
@@ -323,18 +311,13 @@ def main():
 
             ema(model)
             step += 1
-            
-            
-        train_loss_ema = test(model, train_loader, ema, device)
-        val_loss = test(model, val_loader, ema, device)
-        epoch_time = time.time() - epoch_start_time
-        current_lr = optimizer.param_groups[0]['lr']
         
-        is_best = False
+        loss = loss_all / len(train_loader.dataset)
+        val_loss = test(model, val_loader, ema, device)
+        
         if best_val_loss is None or val_loss <= best_val_loss:
             test_loss = test(model, test_loader, ema, device)
             best_val_loss = val_loss
-            is_best = True
             patience_counter = 0
             
             torch.save({
@@ -352,28 +335,24 @@ def main():
             print(f"\nEarly stopping after {epoch+1} epochs (no improvement for {args.patience} epochs)")
             break
         
+        current_lr = optimizer.param_groups[0]['lr']
+        is_best = (val_loss == best_val_loss)
+        
         save_training_log(
             log_path,
             epoch + 1,
-            train_loss_ema,
+            loss,
             val_loss,
             test_loss if test_loss is not None else 0.0,
-            epoch_time,
             current_lr,
             is_best
         )
 
-        print(f'Epoch {epoch+1:03d} [{epoch_time:.1f}s]: '
-              f'Train: {train_loss_ema:.4f}, Val: {val_loss:.4f}, '
-              f'Test: {test_loss:.4f}' + (' 🌟' if is_best else ''))
+        print('Epoch: {:03d}, Train MAE: {:.7f}, Val MAE: {:.7f}, '
+              'Test MAE: {:.7f}'.format(epoch+1, loss, val_loss, test_loss))
     
-    print(f"\n{'='*70}")
-    print(f"Training completed!")
-    print(f"Best Validation MAE: {best_val_loss:.6f}")
-    print(f"Final Test MAE: {test_loss:.6f}")
-    print(f"Log: {log_path}")
-    print(f"Model: {osp.join(save_folder, 'best_attention_fusion1.pt')}")
-    print(f"{'='*70}")
+    print('Best Validation MAE:', best_val_loss)
+    print('Testing MAE:', test_loss)
 
 
 if __name__ == "__main__":
