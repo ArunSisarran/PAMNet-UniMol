@@ -164,8 +164,8 @@ def main():
     parser.add_argument('--gpu', type=int, default=0, help='GPU number')
     parser.add_argument('--seed', type=int, default=480, help='Random seed')
     parser.add_argument('--dataset', type=str, default='QM9', help='Dataset name')
-    parser.add_argument('--epochs', type=int, default=300, help='Number of epochs to train')
-    parser.add_argument('--lr', type=float, default=5e-5, help='Initial learning rate')
+    parser.add_argument('--epochs', type=int, default=10, help='Number of epochs to train')
+    parser.add_argument('--lr', type=float, default=1e-4, help='Initial learning rate')
     parser.add_argument('--wd', type=float, default=0, help='Weight decay')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
     parser.add_argument('--target', type=int, default=7, help='Target property index')
@@ -211,7 +211,7 @@ def main():
     if not osp.exists(emb_path):
         print(f"ERROR: Pre-computed embeddings not found at {emb_path}")
         return
-    
+   
     emb_data = torch.load(emb_path)
     all_embeddings = emb_data['embeddings']
     
@@ -275,7 +275,7 @@ def main():
     scheduler_warmup = GradualWarmupScheduler(
         optimizer,
         multiplier=1.0,
-        total_epoch=1,
+        total_epoch=3,
         after_scheduler=scheduler
     )
 
@@ -299,7 +299,6 @@ def main():
         step = 0
         model.train()
         
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
         
         for data, unimol_embeddings in pbar:
             data = data.to(device)
@@ -316,7 +315,7 @@ def main():
             loss_all += loss.item() * data.num_graphs
             
             loss.backward()
-            clip_grad_norm_(model.parameters(), max_norm=10.0, norm_type=2)
+            clip_grad_norm_(model.parameters(), max_norm=10, norm_type=2)
             optimizer.step()
 
             curr_epoch = epoch + float(step) / (len(train_dataset) / args.batch_size)
@@ -325,10 +324,6 @@ def main():
             ema(model)
             step += 1
             
-            pbar.set_postfix({
-                'loss': f'{loss.item():.4f}',
-                'lr': f'{optimizer.param_groups[0]["lr"]:.2e}'
-            })
             
         train_loss_ema = test(model, train_loader, ema, device)
         val_loss = test(model, val_loader, ema, device)
@@ -377,7 +372,7 @@ def main():
     print(f"Best Validation MAE: {best_val_loss:.6f}")
     print(f"Final Test MAE: {test_loss:.6f}")
     print(f"Log: {log_path}")
-    print(f"Model: {osp.join(save_folder, 'best_attention_fusion.pt')}")
+    print(f"Model: {osp.join(save_folder, 'best_attention_fusion1.pt')}")
     print(f"{'='*70}")
 
 
