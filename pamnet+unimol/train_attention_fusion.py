@@ -303,7 +303,7 @@ def main():
             loss_all += loss.item() * data.num_graphs
             
             loss.backward()
-            clip_grad_norm_(model.parameters(), max_norm=10, norm_type=2)
+            clip_grad_norm_(model.parameters(), max_norm=100, norm_type=2)
             optimizer.step()
 
             curr_epoch = epoch + float(step) / (len(train_dataset) / args.batch_size)
