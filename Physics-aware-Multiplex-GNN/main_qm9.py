@@ -126,7 +126,7 @@ def main():
         if best_val_loss is None or val_loss <= best_val_loss:
             test_loss = test(model, test_loader, ema, device)
             best_val_loss = val_loss
-            torch.save(model.state_dict(), osp.join(save_folder, "best_model.h5"))
+            torch.save(model.state_dict(), osp.join(save_folder, "best_model.pt"))
 
         print('Epoch: {:03d}, Train MAE: {:.7f}, Val MAE: {:.7f}, '
             'Test MAE: {:.7f}'.format(epoch+1, loss, val_loss, test_loss))
