@@ -127,6 +127,8 @@ def main():
     parser.add_argument('--cutoff_l', type=float, default=5.0, help='PAMNet local cutoff')
     parser.add_argument('--cutoff_g', type=float, default=5.0, help='PAMNet global cutoff')
     parser.add_argument('--patience', type=int, default=20, help='Early stopping patience')
+    parser.add_argument('--norm', type=int, default=1000, help="Norm amount")
+    parser.add_argument('--warmup', type=int, default=1, help='warmup scheduler epochs')
     parser.add_argument('--wandb_project', type=str, default='pamnet-unimol-fusion',
                        help='WandB project name')
     parser.add_argument('--wandb_entity', type=str, default='arunsisarrancs-hunter-college',
@@ -163,8 +165,10 @@ def main():
                 "freeze_pamnet": args.freeze_pamnet,
                 "patience": args.patience,
                 "seed": args.seed,
+                "norm": args.norm,
+                "warmup": args.warmup
             },
-            name=f"attention_target{args.target}_lr{args.lr}_heads{args.num_heads}_{args.fusion_dim}fdim_{args.dim}dim"
+            name=f"attention_target{args.target}_lr{args.lr}_heads{args.num_heads}_{args.fusion_dim}fdim_{args.dim}dim_{args.norm}norm_{args.warmup}ws"
         )
     
     print(f"Attention Fusion Training - Target: {args.target}, LR: {args.lr}, Freeze PAMNet: {args.freeze_pamnet}")
@@ -256,7 +260,7 @@ def main():
     scheduler_warmup = GradualWarmupScheduler(
         optimizer,
         multiplier=1.0,
-        total_epoch=1,
+        total_epoch=args.warmup,
         after_scheduler=scheduler
     )
 
@@ -294,7 +298,7 @@ def main():
             loss_all += loss.item() * data.num_graphs
             
             loss.backward()
-            clip_grad_norm_(model.parameters(), max_norm=1000, norm_type=2)
+            clip_grad_norm_(model.parameters(), max_norm=args.norm, norm_type=2)
             optimizer.step()
 
             curr_epoch = epoch + float(step) / (len(train_dataset) / args.batch_size)
