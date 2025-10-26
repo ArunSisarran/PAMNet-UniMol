@@ -105,50 +105,6 @@ def test(model, loader, ema, device):
     ema.resume(model)
     return mae / len(loader.dataset)
 
-
-def load_pamnet_checkpoint(checkpoint_path, config):
-    print(f"Loading PAMNet from checkpoint: {checkpoint_path}")
-    
-    model = PAMNet(config)
-    
-    try:
-        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-        
-        if isinstance(checkpoint, dict):
-            if 'model_state_dict' in checkpoint:
-                state_dict = checkpoint['model_state_dict']
-            elif 'state_dict' in checkpoint:
-                state_dict = checkpoint['state_dict']
-            else:
-                state_dict = checkpoint
-        else:
-            raise ValueError("Invalid checkpoint format")
-        
-        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-        
-        return model
-        
-    except Exception as e:
-        try:
-            with h5py.File(checkpoint_path, 'r') as f:
-                print(f"HDF5 file contains {len(f.keys())} top-level keys")
-                
-                state_dict = {}
-                
-                def load_weights(name, obj):
-                    if isinstance(obj, h5py.Dataset):
-                        weight = torch.from_numpy(obj[()])
-                        state_dict[name] = weight
-                
-                f.visititems(load_weights)
-            
-            missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-            return model
-            
-        except Exception as e2:
-            raise RuntimeError(f"Could not load checkpoint from {checkpoint_path}")
-
-
 def main():
     parser = argparse.ArgumentParser(description='Train attention fusion model')
     parser.add_argument('--gpu', type=int, default=0, help='GPU number')
@@ -162,12 +118,12 @@ def main():
     parser.add_argument('--fusion_dim', type=int, default=256, help='Fusion layer dimension')
     parser.add_argument('--num_heads', type=int, default=2, help='Number of attention heads')
     parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
-    parser.add_argument('--pamnet_checkpoint', type=str, default='best_model.h5',
-                       help='Path to pretrained PAMNet checkpoint (.h5)')
+    parser.add_argument('--pamnet_checkpoint', type=str, default='best_model.pt',
+                       help='Path to pretrained PAMNet checkpoint')
     parser.add_argument('--freeze_pamnet', action='store_true',
                        help='Freeze PAMNet weights (default: False)')
     parser.add_argument('--n_layer', type=int, default=6, help='Number of PAMNet layers')
-    parser.add_argument('--dim', type=int, default=256, help='PAMNet hidden dimension')
+    parser.add_argument('--dim', type=int, default=128, help='PAMNet hidden dimension')
     parser.add_argument('--cutoff_l', type=float, default=5.0, help='PAMNet local cutoff')
     parser.add_argument('--cutoff_g', type=float, default=5.0, help='PAMNet global cutoff')
     parser.add_argument('--patience', type=int, default=20, help='Early stopping patience')
@@ -255,10 +211,6 @@ def main():
                             collate_fn=collate_with_embeddings)
     print("Data loaded!")
 
-    if not osp.exists(args.pamnet_checkpoint):
-        print(f"ERROR: PAMNet checkpoint not found at {args.pamnet_checkpoint}")
-        return
-    
     config = Config(
         dataset=args.dataset,
         dim=args.dim,
@@ -267,11 +219,9 @@ def main():
         cutoff_g=args.cutoff_g
     )
     
-    try:
-        pamnet_model = load_pamnet_checkpoint(args.pamnet_checkpoint, config)
-    except Exception as e:
-        print(f"ERROR loading PAMNet: {e}")
-        return
+    pamnet_model = PAMNet(config).to(device)
+    pamnet_model.load_state_dict(torch.load(args.pamnet_checkpoint, map_location=device))
+    print(f"Loaded PAMNet from {args.pamnet_checkpoint}")
 
     model = Hybrid_Model(
         pamnet_model=pamnet_model,
