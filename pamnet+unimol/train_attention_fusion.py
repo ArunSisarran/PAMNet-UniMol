@@ -65,27 +65,27 @@ def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-def save_training_log(log_path, epoch, train_mae, val_mae, test_mae, lr, is_best=False):
-    file_exists = osp.exists(log_path)
-    
-    with open(log_path, 'a', newline='') as f:
-        writer = csv.writer(f)
-        
-        if not file_exists:
-            writer.writerow([
-                'timestamp', 'epoch', 'train_mae', 'val_mae', 'test_mae', 
-                'learning_rate', 'is_best'
-            ])
-        
-        writer.writerow([
-            datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            epoch,
-            f'{train_mae:.7f}',
-            f'{val_mae:.7f}',
-            f'{test_mae:.7f}',
-            f'{lr:.8f}',
-            is_best
-        ])
+#def save_training_log(log_path, epoch, train_mae, val_mae, test_mae, lr, is_best=False):
+#    file_exists = osp.exists(log_path)
+#    
+#    with open(log_path, 'a', newline='') as f:
+#        writer = csv.writer(f)
+#        
+#        if not file_exists:
+#            writer.writerow([
+#                'timestamp', 'epoch', 'train_mae', 'val_mae', 'test_mae', 
+#                'learning_rate', 'is_best'
+#            ])
+#        
+#        writer.writerow([
+#            datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+#            epoch,
+#            f'{train_mae:.7f}',
+#            f'{val_mae:.7f}',
+#            f'{test_mae:.7f}',
+#            f'{lr:.8f}',
+#            is_best
+#        ])
 
 
 def test(model, loader, ema, device):
@@ -129,6 +129,7 @@ def main():
     parser.add_argument('--patience', type=int, default=20, help='Early stopping patience')
     parser.add_argument('--norm', type=int, default=1000, help="Norm amount")
     parser.add_argument('--warmup', type=int, default=1, help='warmup scheduler epochs')
+    parser.add_argument('--gamma', type=float, default=0.996167, help='scheduler gamma')
     parser.add_argument('--wandb_project', type=str, default='pamnet-unimol-fusion',
                        help='WandB project name')
     parser.add_argument('--wandb_entity', type=str, default='arunsisarrancs-hunter-college',
@@ -168,7 +169,7 @@ def main():
                 "norm": args.norm,
                 "warmup": args.warmup
             },
-            name=f"attention_target{args.target}_lr{args.lr}_heads{args.num_heads}_{args.fusion_dim}fdim_{args.dim}dim_{args.norm}norm_{args.warmup}ws"
+            name=f"attention_target{args.target}_lr{args.lr}_heads{args.num_heads}_{args.fusion_dim}fdim_{args.dim}dim_{args.batch_size}batch"
         )
     
     print(f"Attention Fusion Training - Target: {args.target}, LR: {args.lr}, Freeze PAMNet: {args.freeze_pamnet}")
@@ -256,7 +257,7 @@ def main():
         wandb.watch(model, log="all", log_freq=100)
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd, amsgrad=False)
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9961697)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.gamma)
     scheduler_warmup = GradualWarmupScheduler(
         optimizer,
         multiplier=1.0,
@@ -340,15 +341,15 @@ def main():
         current_lr = optimizer.param_groups[0]['lr']
         is_best = (val_loss == best_val_loss)
         
-        save_training_log(
-            log_path,
-            epoch + 1,
-            loss,
-            val_loss,
-            test_loss if test_loss is not None else 0.0,
-            current_lr,
-            is_best
-        )
+        #save_training_log(
+        #    log_path,
+        #    epoch + 1,
+        #    loss,
+        #    val_loss,
+        #    test_loss if test_loss is not None else 0.0,
+        #    current_lr,
+        #    is_best
+        #)
 
         if not args.no_wandb:
             wandb.log({
