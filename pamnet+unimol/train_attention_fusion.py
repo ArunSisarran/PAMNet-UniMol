@@ -183,7 +183,7 @@ def main():
             return data
 
     path = osp.join('.', 'data', args.dataset)
-    dataset = QM9(path, transform=MyTransform()).shuffle()
+    dataset = QM9(path, transform=MyTransform())
 
     train_dataset = dataset[:110000]
     val_dataset = dataset[110000:120000]
