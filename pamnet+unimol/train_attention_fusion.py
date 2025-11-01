@@ -185,25 +185,29 @@ def main():
     path = osp.join('.', 'data', args.dataset)
     dataset = QM9(path, transform=MyTransform())
 
-    train_dataset = dataset[:110000]
-    val_dataset = dataset[110000:120000]
-    test_dataset = dataset[120000:]
-
     emb_path = osp.join('.', 'data', args.dataset, 'precomputed', 'unimol_embeddings.pt')
-    
-    if not osp.exists(emb_path):
-        print(f"ERROR: Pre-computed embeddings not found at {emb_path}")
-        return
-   
     emb_data = torch.load(emb_path)
     all_embeddings = emb_data['embeddings']
-    
-    train_embeddings = all_embeddings[:110000]
-    val_embeddings = all_embeddings[110000:120000]
-    test_embeddings = all_embeddings[120000:]
-    
+
+    split_path = osp.join('.', 'data', args.dataset, 'split_indices.pt')
+
+    split_data = torch.load(split_path)
+    train_indices = split_data['train_indices']
+    val_indices = split_data['val_indices']
+    test_indices = split_data['test_indices']
+
+    print(f"Using fixed split: Train={len(train_indices)}, Val={len(val_indices)}, Test={len(test_indices)}")
+
+    train_dataset = [dataset[i] for i in train_indices]
+    val_dataset = [dataset[i] for i in val_indices]
+    test_dataset = [dataset[i] for i in test_indices]
+
+    train_embeddings = all_embeddings[train_indices]
+    val_embeddings = all_embeddings[val_indices]
+    test_embeddings = all_embeddings[test_indices]
+
     unimol_dim = all_embeddings.shape[-1]
-    
+
     train_dataset = QM9WithEmbeddings(train_dataset, train_embeddings)
     val_dataset = QM9WithEmbeddings(val_dataset, val_embeddings)
     test_dataset = QM9WithEmbeddings(test_dataset, test_embeddings)

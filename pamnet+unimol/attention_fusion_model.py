@@ -53,10 +53,16 @@ class Hybrid_Model(nn.Module):
         
         # Prediction head
         self.predictor = nn.Sequential(
-            nn.Linear(fusion_dim * 2, 128),
+            nn.Linear(fusion_dim * 2, fusion_dim * 2),  
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(128, 1)
+            nn.Linear(fusion_dim * 2, fusion_dim),     
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(fusion_dim, fusion_dim // 2),    
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(fusion_dim // 2, 1) l
         )
         
         self._init_predictor_weights()
