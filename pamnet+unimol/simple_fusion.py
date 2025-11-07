@@ -52,9 +52,6 @@ class Hybrid_Model(nn.Module):
             nn.Linear(fusion_dim * 2, fusion_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(fusion_dim, 128),
-            nn.ReLU(),
-            nn.Dropout(dropout),
             nn.Linear(128, 1)
         )
         
@@ -180,5 +177,4 @@ class Hybrid_Model(nn.Module):
 
 
 def count_parameters(model):
-    """Count trainable parameters"""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
