@@ -28,7 +28,7 @@ from ema import EMA
 sys.path.append(os.path.join(pamnet_dir, "datasets"))
 from qm9_dataset import QM9
 
-from simple_fusion import Hybrid_Model
+from attention_fusion_model import Attention_Fusion
 
 
 class QM9WithEmbeddings(torch.utils.data.Dataset):
@@ -88,56 +88,13 @@ def test(model, loader, ema, device):
     return mae / len(loader.dataset)
 
 
-def load_pamnet_checkpoint(checkpoint_path, config):
-    print(f"Loading PAMNet from checkpoint: {checkpoint_path}")
-    
-    model = PAMNet(config)
-    
-    try:
-        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-        
-        if isinstance(checkpoint, dict):
-            if 'model_state_dict' in checkpoint:
-                state_dict = checkpoint['model_state_dict']
-            elif 'state_dict' in checkpoint:
-                state_dict = checkpoint['state_dict']
-            else:
-                state_dict = checkpoint
-        else:
-            raise ValueError("Invalid checkpoint format")
-        
-        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-        
-        return model
-        
-    except Exception as e:
-        try:
-            with h5py.File(checkpoint_path, 'r') as f:
-                print(f"HDF5 file contains {len(f.keys())} top-level keys")
-                
-                state_dict = {}
-                
-                def load_weights(name, obj):
-                    if isinstance(obj, h5py.Dataset):
-                        weight = torch.from_numpy(obj[()])
-                        state_dict[name] = weight
-                
-                f.visititems(load_weights)
-            
-            missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-            return model
-            
-        except Exception as e2:
-            raise RuntimeError(f"Could not load checkpoint from {checkpoint_path}")
-
-
 def main():
     parser = argparse.ArgumentParser(description='Train simple fusion model')
     parser.add_argument('--gpu', type=int, default=0, help='GPU number')
     parser.add_argument('--seed', type=int, default=480, help='Random seed')
     parser.add_argument('--dataset', type=str, default='QM9', help='Dataset name')
     parser.add_argument('--epochs', type=int, default=10, help='Number of epochs to train')
-    parser.add_argument('--lr', type=float, default=5e-5, help='Initial learning rate')
+    parser.add_argument('--lr', type=float, default=1e-4, help='Initial learning rate')
     parser.add_argument('--wd', type=float, default=0, help='Weight decay')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
     parser.add_argument('--target', type=int, default=7, help='Target property index')
@@ -145,7 +102,7 @@ def main():
     parser.add_argument('--num_heads', type=int, default=2, help='Number of attention heads')
     parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
     parser.add_argument('--pamnet_checkpoint', type=str, default='best_model.pt',
-                       help='Path to pretrained PAMNet checkpoint (.h5)')
+                       help='Path to pretrained PAMNet')
     parser.add_argument('--freeze_pamnet', action='store_true',
                        help='Freeze PAMNet weights (default: False)')
     parser.add_argument('--n_layer', type=int, default=6, help='Number of PAMNet layers')
@@ -156,7 +113,7 @@ def main():
     parser.add_argument('--norm', type=int, default=1000, help="Norm amount")
     parser.add_argument('--warmup', type=int, default=1, help='warmup scheduler epochs')
     parser.add_argument('--gamma', type=float, default=0.9961697, help='scheduler gamma')
-    parser.add_argument('--wandb_project', type=str, default='old_fusion',
+    parser.add_argument('--wandb_project', type=str, default='Attention_Fusion',
                        help='WandB project name')
     parser.add_argument('--wandb_entity', type=str, default='arunsisarrancs-hunter-college',
                        help='WandB entity (username or team)')
@@ -199,7 +156,7 @@ def main():
             name=f"simple_fusion_target{args.target}_lr{args.lr}_heads{args.num_heads}_{args.fusion_dim}fdim_{args.dim}dim_{args.batch_size}batch"
         )
     
-    print(f"Simple Fusion Training - Target: {args.target}, LR: {args.lr}, Freeze PAMNet: {args.freeze_pamnet}")
+    print(f"Attention Fusion Training - Target: {args.target}, LR: {args.lr}, Freeze PAMNet: {args.freeze_pamnet}")
     
     class MyTransform(object):
         def __call__(self, data):
@@ -262,7 +219,7 @@ def main():
         print(f"ERROR loading PAMNet: {e}")
         return
 
-    model = Hybrid_Model(
+    model = Attention_Fusion(
         pamnet_model=pamnet_model,
         unimol_dim=unimol_dim,
         fusion_dim=args.fusion_dim,
@@ -362,7 +319,7 @@ def main():
             #    'val_loss': val_loss,
             #    'test_loss': test_loss,
             #    'config': vars(args),
-            #}, osp.join(save_folder, "best_simple_fusion.pt"))
+            #}, osp.join(save_folder, "best_attention_fusion.pt"))
         else:
             patience_counter += 1
             

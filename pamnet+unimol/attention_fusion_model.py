@@ -5,7 +5,7 @@ from torch_geometric.nn import global_add_pool, radius
 from torch_geometric.utils import remove_self_loops
 
 
-class Hybrid_Model(nn.Module):
+class Attention_Fusion(nn.Module):
 
     def __init__(self, pamnet_model, unimol_dim=512, fusion_dim=128, num_heads=2, dropout=0.1, freeze_pamnet=False):
         super().__init__()
@@ -50,6 +50,9 @@ class Hybrid_Model(nn.Module):
         
         self.predictor = nn.Sequential(
             nn.Linear(fusion_dim * 2, fusion_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(fusion_dim, 128),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(128, 1)
