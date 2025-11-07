@@ -11,6 +11,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch_geometric.data import DataLoader
 from warmup_scheduler import GradualWarmupScheduler
 import csv
+import time
 from datetime import datetime
 import h5py
 from torch_geometric.data import Batch
@@ -27,7 +28,7 @@ from ema import EMA
 sys.path.append(os.path.join(pamnet_dir, "datasets"))
 from qm9_dataset import QM9
 
-from attention_fusion_model import Hybrid_Model
+from attention_fusion_model import Attention_Fusion
 
 
 class QM9WithEmbeddings(torch.utils.data.Dataset):
@@ -65,48 +66,30 @@ def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-#def save_training_log(log_path, epoch, train_mae, val_mae, test_mae, lr, is_best=False):
-#    file_exists = osp.exists(log_path)
-#    
-#    with open(log_path, 'a', newline='') as f:
-#        writer = csv.writer(f)
-#        
-#        if not file_exists:
-#            writer.writerow([
-#                'timestamp', 'epoch', 'train_mae', 'val_mae', 'test_mae', 
-#                'learning_rate', 'is_best'
-#            ])
-#        
-#        writer.writerow([
-#            datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-#            epoch,
-#            f'{train_mae:.7f}',
-#            f'{val_mae:.7f}',
-#            f'{test_mae:.7f}',
-#            f'{lr:.8f}',
-#            is_best
-#        ])
-
-
 def test(model, loader, ema, device):
     mae = 0
     ema.assign(model)
-    for data, unimol_embeddings in loader:
-        data = data.to(device)
-        unimol_embeddings = unimol_embeddings.to(device)
-        
-        output = model(data, unimol_embeddings)
-        
-        target = data.y.view(-1)
-        output = output.view(-1)
-        
-        mae += (output - target).abs().sum().item()
+    model.eval()
+    
+    with torch.no_grad():
+        for data, unimol_embeddings in loader:
+            data = data.to(device)
+            unimol_embeddings = unimol_embeddings.to(device)
+            
+            output = model(data, unimol_embeddings)
+            
+            target = data.y.view(-1)
+            output = output.view(-1)
+            
+            batch_mae = (output - target).abs().sum().item()
+            mae += batch_mae
     
     ema.resume(model)
     return mae / len(loader.dataset)
 
+
 def main():
-    parser = argparse.ArgumentParser(description='Train attention fusion model')
+    parser = argparse.ArgumentParser(description='Train simple fusion model')
     parser.add_argument('--gpu', type=int, default=0, help='GPU number')
     parser.add_argument('--seed', type=int, default=480, help='Random seed')
     parser.add_argument('--dataset', type=str, default='QM9', help='Dataset name')
@@ -115,11 +98,11 @@ def main():
     parser.add_argument('--wd', type=float, default=0, help='Weight decay')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
     parser.add_argument('--target', type=int, default=7, help='Target property index')
-    parser.add_argument('--fusion_dim', type=int, default=256, help='Fusion layer dimension')
+    parser.add_argument('--fusion_dim', type=int, default=128, help='Fusion layer dimension')
     parser.add_argument('--num_heads', type=int, default=2, help='Number of attention heads')
     parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
     parser.add_argument('--pamnet_checkpoint', type=str, default='best_model.pt',
-                       help='Path to pretrained PAMNet checkpoint')
+                       help='Path to pretrained PAMNet')
     parser.add_argument('--freeze_pamnet', action='store_true',
                        help='Freeze PAMNet weights (default: False)')
     parser.add_argument('--n_layer', type=int, default=6, help='Number of PAMNet layers')
@@ -129,8 +112,8 @@ def main():
     parser.add_argument('--patience', type=int, default=20, help='Early stopping patience')
     parser.add_argument('--norm', type=int, default=1000, help="Norm amount")
     parser.add_argument('--warmup', type=int, default=1, help='warmup scheduler epochs')
-    parser.add_argument('--gamma', type=float, default=0.996167, help='scheduler gamma')
-    parser.add_argument('--wandb_project', type=str, default='pamnet-unimol-fusion',
+    parser.add_argument('--gamma', type=float, default=0.9961697, help='scheduler gamma')
+    parser.add_argument('--wandb_project', type=str, default='Attention_Fusion',
                        help='WandB project name')
     parser.add_argument('--wandb_entity', type=str, default='arunsisarrancs-hunter-college',
                        help='WandB entity (username or team)')
@@ -149,7 +132,7 @@ def main():
             project=args.wandb_project,
             entity=args.wandb_entity,
             config={
-                "architecture": "AttentionFusion",
+                "architecture": "SimpleFusion",
                 "dataset": args.dataset,
                 "target": args.target,
                 "learning_rate": args.lr,
@@ -167,9 +150,10 @@ def main():
                 "patience": args.patience,
                 "seed": args.seed,
                 "norm": args.norm,
-                "warmup": args.warmup
+                "warmup": args.warmup,
+                "gamma": args.gamma
             },
-            name=f"attention_target{args.target}_lr{args.lr}_heads{args.num_heads}_{args.fusion_dim}fdim_{args.dim}dim_{args.batch_size}batch"
+            name=f"simple_fusion_target{args.target}_lr{args.lr}_heads{args.num_heads}_{args.fusion_dim}fdim_{args.dim}dim_{args.batch_size}batch"
         )
     
     print(f"Attention Fusion Training - Target: {args.target}, LR: {args.lr}, Freeze PAMNet: {args.freeze_pamnet}")
@@ -183,27 +167,31 @@ def main():
             return data
 
     path = osp.join('.', 'data', args.dataset)
-    dataset = QM9(path, transform=MyTransform()).shuffle()
-
-    train_dataset = dataset[:110000]
-    val_dataset = dataset[110000:120000]
-    test_dataset = dataset[120000:]
+    dataset = QM9(path, transform=MyTransform())
 
     emb_path = osp.join('.', 'data', args.dataset, 'precomputed', 'unimol_embeddings.pt')
-    
-    if not osp.exists(emb_path):
-        print(f"ERROR: Pre-computed embeddings not found at {emb_path}")
-        return
-   
     emb_data = torch.load(emb_path)
     all_embeddings = emb_data['embeddings']
-    
-    train_embeddings = all_embeddings[:110000]
-    val_embeddings = all_embeddings[110000:120000]
-    test_embeddings = all_embeddings[120000:]
-    
+
+    split_path = osp.join('.', 'data', args.dataset, 'split_indices.pt')
+
+    split_data = torch.load(split_path)
+    train_indices = split_data['train_indices']
+    val_indices = split_data['val_indices']
+    test_indices = split_data['test_indices']
+
+    print(f"Using fixed split: Train={len(train_indices)}, Val={len(val_indices)}, Test={len(test_indices)}")
+
+    train_dataset = [dataset[i] for i in train_indices]
+    val_dataset = [dataset[i] for i in val_indices]
+    test_dataset = [dataset[i] for i in test_indices]
+
+    train_embeddings = all_embeddings[train_indices]
+    val_embeddings = all_embeddings[val_indices]
+    test_embeddings = all_embeddings[test_indices]
+
     unimol_dim = all_embeddings.shape[-1]
-    
+
     train_dataset = QM9WithEmbeddings(train_dataset, train_embeddings)
     val_dataset = QM9WithEmbeddings(val_dataset, val_embeddings)
     test_dataset = QM9WithEmbeddings(test_dataset, test_embeddings)
@@ -224,11 +212,14 @@ def main():
         cutoff_g=args.cutoff_g
     )
     
-    pamnet_model = PAMNet(config).to(device)
-    pamnet_model.load_state_dict(torch.load(args.pamnet_checkpoint, map_location=device))
-    print(f"Loaded PAMNet from {args.pamnet_checkpoint}")
+    try:
+        pamnet_model = PAMNet(config).to(device)
+        pamnet_model.load_state_dict(torch.load(args.pamnet_checkpoint, map_location=device))
+    except Exception as e:
+        print(f"ERROR loading PAMNet: {e}")
+        return
 
-    model = Hybrid_Model(
+    model = Attention_Fusion(
         pamnet_model=pamnet_model,
         unimol_dim=unimol_dim,
         fusion_dim=args.fusion_dim,
@@ -239,7 +230,6 @@ def main():
     
     trainable_params = count_parameters(model)
     
-    # Initialize output bias to target mean
     sample_targets = []
     for i in range(min(10000, len(train_dataset))):
         sample_targets.append(train_dataset[i][0].y.item())
@@ -267,11 +257,9 @@ def main():
 
     ema = EMA(model, decay=0.999)
     
-    save_folder = osp.join(".", "save", args.dataset + "_attention_fusion")
+    save_folder = osp.join(".", "save", args.dataset + "_simple_fusion")
     if not osp.exists(save_folder):
         os.makedirs(save_folder)
-    
-    log_path = osp.join(save_folder, f"training_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
     
     print("Start training!")
     
@@ -280,6 +268,7 @@ def main():
     patience_counter = 0
     
     for epoch in range(args.epochs):
+        epoch_start_time = time.time()
         loss_all = 0
         step = 0
         model.train()
@@ -339,17 +328,6 @@ def main():
             break
         
         current_lr = optimizer.param_groups[0]['lr']
-        is_best = (val_loss == best_val_loss)
-        
-        #save_training_log(
-        #    log_path,
-        #    epoch + 1,
-        #    loss,
-        #    val_loss,
-        #    test_loss if test_loss is not None else 0.0,
-        #    current_lr,
-        #    is_best
-        #)
 
         if not args.no_wandb:
             wandb.log({
@@ -368,6 +346,7 @@ def main():
 
     if not args.no_wandb:
         wandb.finish()
+
 
 if __name__ == "__main__":
     main()
