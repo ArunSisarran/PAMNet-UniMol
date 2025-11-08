@@ -116,6 +116,7 @@ def main():
     parser.add_argument('--gamma', type=float, default=0.9961697, help='scheduler gamma')
     parser.add_argument('--tmax', type=int, default=10, help='T_max for cosine annealing lr')
     parser.add_argument('--eta_min', type=float, default=1e-6, help='eta_min for cosine annealing')
+    parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'adamw'])
     parser.add_argument('--wandb_project', type=str, default='Attention_Fusion',
                        help='WandB project name')
     parser.add_argument('--wandb_entity', type=str, default='arunsisarrancs-hunter-college',
@@ -249,7 +250,10 @@ def main():
         })
         wandb.watch(model, log="all", log_freq=100)
 
-    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd, amsgrad=False)
+    if args.optimizer == 'adam':
+        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd, amsgrad=False)
+    elif args.optimizer == 'adamw':
+        optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd, amsgrad=False)
 
     if args.scheduler == 'exponential':
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.gamma)
