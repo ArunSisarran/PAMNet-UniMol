@@ -89,7 +89,7 @@ def test(model, loader, ema, device):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Train simple fusion model')
+    parser = argparse.ArgumentParser(description='Train attention fusion model')
     parser.add_argument('--gpu', type=int, default=0, help='GPU number')
     parser.add_argument('--seed', type=int, default=480, help='Random seed')
     parser.add_argument('--dataset', type=str, default='QM9', help='Dataset name')
@@ -112,7 +112,11 @@ def main():
     parser.add_argument('--patience', type=int, default=20, help='Early stopping patience')
     parser.add_argument('--norm', type=int, default=1000, help="Norm amount")
     parser.add_argument('--warmup', type=int, default=1, help='warmup scheduler epochs')
+    parser.add_argument('--scheduler', type=str, default='exponential', choices=['exponential', 'cosine'])
     parser.add_argument('--gamma', type=float, default=0.9961697, help='scheduler gamma')
+    parser.add_argument('--tmax', type=int, default=10, help='T_max for cosine annealing lr')
+    parser.add_argument('--eta_min', type=float, default=1e-6, help='eta_min for cosine annealing')
+    parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'adamw'])
     parser.add_argument('--wandb_project', type=str, default='Attention_Fusion',
                        help='WandB project name')
     parser.add_argument('--wandb_entity', type=str, default='arunsisarrancs-hunter-college',
@@ -246,8 +250,16 @@ def main():
         })
         wandb.watch(model, log="all", log_freq=100)
 
-    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd, amsgrad=False)
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.gamma)
+    if args.optimizer == 'adam':
+        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd, amsgrad=False)
+    elif args.optimizer == 'adamw':
+        optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd, amsgrad=False)
+
+    if args.scheduler == 'exponential':
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.gamma)
+    elif args.scheduler == 'cosine':
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.tmax, eta_min=args.eta_min, last_epoch=-1)
+
     scheduler_warmup = GradualWarmupScheduler(
         optimizer,
         multiplier=1.0,
