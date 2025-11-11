@@ -42,7 +42,7 @@ class Attention_Fusion(nn.Module):
         
         self.ffn = nn.Sequential(
             nn.Linear(fusion_dim * 2, fusion_dim * 2),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(fusion_dim * 2, fusion_dim * 2),
             nn.Dropout(dropout)
