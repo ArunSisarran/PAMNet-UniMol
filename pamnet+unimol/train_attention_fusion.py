@@ -276,7 +276,7 @@ def main():
     print("Start training!")
     
     best_val_loss = None
-    test_loss = None
+    test_loss_ema = None
     patience_counter = 0
     
     for epoch in range(args.epochs):
@@ -317,11 +317,12 @@ def main():
                 })
         
         loss = loss_all / len(train_loader.dataset)
-        val_loss = test(model, val_loader, ema, device)
+        val_loss_ema = test(model, val_loader, ema, device)
+        train_loss_ema = test(model, train_loader, ema, device)
         
-        if best_val_loss is None or val_loss <= best_val_loss:
-            test_loss = test(model, test_loader, ema, device)
-            best_val_loss = val_loss
+        if best_val_loss is None or val_loss_ema <= best_val_loss:
+            test_loss_ema = test(model, test_loader, ema, device)
+            best_val_loss = val_loss_ema
             patience_counter = 0
             
             #torch.save({
@@ -345,16 +346,16 @@ def main():
             wandb.log({
                 "epoch": epoch + 1,
                 "train/mae": loss,
-                "val/mae": val_loss,
-                "test/mae": test_loss if test_loss is not None else 0.0,
+                "val/mae": val_loss_ema,
+                "test/mae": test_loss_ema if test_loss_ema is not None else 0.0,
                 "train/learning_rate": current_lr,
             })
 
         print('Epoch: {:03d}, Train MAE: {:.7f}, Val MAE: {:.7f}, '
-              'Test MAE: {:.7f}'.format(epoch+1, loss, val_loss, test_loss))
+              'Test MAE: {:.7f}'.format(epoch+1, train_loss_ema, val_loss_ema, test_loss_ema))
     
     print('Best Validation MAE:', best_val_loss)
-    print('Testing MAE:', test_loss)
+    print('Testing MAE:', test_loss_ema)
 
     if not args.no_wandb:
         wandb.finish()
