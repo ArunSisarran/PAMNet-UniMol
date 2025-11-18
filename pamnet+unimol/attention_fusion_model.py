@@ -25,14 +25,14 @@ class Attention_Fusion(nn.Module):
         self.cross_attn_p2u = nn.MultiheadAttention(
             embed_dim=fusion_dim,
             num_heads=num_heads,
-            dropout=dropout,
+            dropout=0.0,
             batch_first=True
         )
         
         self.cross_attn_u2p = nn.MultiheadAttention(
             embed_dim=fusion_dim,
             num_heads=num_heads,
-            dropout=dropout,
+            dropout=0.0,
             batch_first=True
         )
         
