@@ -25,14 +25,14 @@ class Attention_Fusion(nn.Module):
         self.cross_attn_p2u = nn.MultiheadAttention(
             embed_dim=fusion_dim,
             num_heads=num_heads,
-            dropout=0.0,
+            dropout=dropout,
             batch_first=True
         )
         
         self.cross_attn_u2p = nn.MultiheadAttention(
             embed_dim=fusion_dim,
             num_heads=num_heads,
-            dropout=0.0,
+            dropout=dropout,
             batch_first=True
         )
         
@@ -50,9 +50,6 @@ class Attention_Fusion(nn.Module):
         
         self.predictor = nn.Sequential(
             nn.Linear(fusion_dim * 2, fusion_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(fusion_dim, 128),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(128, 1)
