@@ -18,6 +18,9 @@ class Attention_Fusion(nn.Module):
                 param.requires_grad = False
         
         pamnet_dim = pamnet_model.dim  
+
+        self.pamnet_norm = nn.LayerNorm(pamnet_dim)
+        self.unimol_norm = nn.LayerNorm(unimol_dim)
         
         self.pamnet_proj = nn.Linear(pamnet_dim, fusion_dim)
         self.unimol_proj = nn.Linear(unimol_dim, fusion_dim)
@@ -138,9 +141,16 @@ class Attention_Fusion(nn.Module):
                 pamnet_features = self.extract_pamnet_features(graph_data)
         else:
             pamnet_features = self.extract_pamnet_features(graph_data)
+
+        pamnet_features = self.pamnet_norm(pamnet_features)
         
         if unimol_embeddings.dim() == 1:
             unimol_embeddings = unimol_embeddings.unsqueeze(0)
+
+        unimol_embeddings = self.unimol_norm(unimol_embeddings)
+
+        print(f"NORMALIZED - UniMol: mean={unimol_embeddings.mean():.4f}, std={unimol_embeddings.std():.4f}")
+        print(f"NORMALIZED - PAMNet: mean={pamnet_features.mean():.4f}, std={pamnet_features.std():.4f}")
 
         pamnet_proj = self.pamnet_proj(pamnet_features)  
         unimol_proj = self.unimol_proj(unimol_embeddings)  
