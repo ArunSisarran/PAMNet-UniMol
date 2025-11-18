@@ -62,7 +62,14 @@ class Attention_Fusion(nn.Module):
     def _init_predictor_weights(self):
         for i, module in enumerate(self.predictor.modules()):
             if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight, gain=0.1)
+                if i == 0:
+                    nn.init.xavier_uniform_(module.weight, gain=0.5)
+                    
+                    with torch.no_grad():
+                        module.weight[:, :self.fusion_dim] *= 2.0  # PAMNet side
+                        module.weight[:, self.fusion_dim:] *= 0.5  # UniMol side
+                else:
+                    nn.init.xavier_uniform_(module.weight, gain=0.1)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
     
@@ -134,6 +141,9 @@ class Attention_Fusion(nn.Module):
         
         if unimol_embeddings.dim() == 1:
             unimol_embeddings = unimol_embeddings.unsqueeze(0)
+
+        print(f"UniMol stats: mean={unimol_embeddings.mean():.4f}, std={unimol_embeddings.std():.4f}")
+        print(f"PAMNet stats: mean={pamnet_features.mean():.4f}, std={pamnet_features.std():.4f}")
         
         pamnet_proj = self.pamnet_proj(pamnet_features)  
         unimol_proj = self.unimol_proj(unimol_embeddings)  
