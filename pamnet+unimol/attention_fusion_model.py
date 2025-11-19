@@ -61,6 +61,8 @@ class Attention_Fusion(nn.Module):
         self._init_predictor_weights()
         
         self.dropout = nn.Dropout(dropout)
+        self.pamnet_direct = nn.Linear(fusion_dim, 1)
+        self.fusion_weight = nn.Parameter(torch.tensor(0.1))
     
     def _init_predictor_weights(self):
         for i, module in enumerate(self.predictor.modules()):
@@ -174,8 +176,12 @@ class Attention_Fusion(nn.Module):
         fused = torch.cat([pamnet_attended, unimol_attended], dim=-1)  
         
         fused = self.norm3(fused + self.ffn(fused))
+
+        direct_output = self.pamnet_direct(pamnet_proj).squeeze(-1)
+        fusion_output = self.predictor(fused).squeeze(-1)
+        output = direct_output + self.fusion_weight * fusion_output
         
-        output = self.predictor(fused).squeeze(-1)  
+#        output = self.predictor(fused).squeeze(-1)  
         
         if return_attention:
             attention_info = {
