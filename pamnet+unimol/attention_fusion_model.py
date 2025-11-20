@@ -54,10 +54,16 @@ class Attention_Fusion(nn.Module):
         )
         
         self.predictor = nn.Sequential(
+            nn.Linear(fusion_dim * 2, fusion_dim * 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
             nn.Linear(fusion_dim * 2, fusion_dim),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(fusion_dim, 1)
+            nn.Linear(fusion_dim, fusion_dim // 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(fusion_dim // 2, 1)
         )
         
         self._init_predictor_weights()
