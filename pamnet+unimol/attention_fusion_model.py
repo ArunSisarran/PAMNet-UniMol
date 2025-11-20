@@ -12,13 +12,17 @@ class Attention_Fusion(nn.Module):
         
         self.pamnet_model = pamnet_model
         self.freeze_pamnet = freeze_pamnet
+        self.fusion_dim = fusion_dim
         
         if freeze_pamnet:
             for param in self.pamnet_model.parameters():
                 param.requires_grad = False
         
         pamnet_dim = pamnet_model.dim  
-        
+
+        self.pamnet_scale = nn.Parameter(torch.ones(1))
+        self.unimol_scale = nn.Parameter(torch.ones(1))
+
         self.pamnet_proj = nn.Linear(pamnet_dim, fusion_dim)
         self.unimol_proj = nn.Linear(unimol_dim, fusion_dim)
         
@@ -52,20 +56,26 @@ class Attention_Fusion(nn.Module):
             nn.Linear(fusion_dim * 2, fusion_dim),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(fusion_dim, 128),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(128, 1)
+            nn.Linear(fusion_dim, 1)
         )
         
         self._init_predictor_weights()
         
         self.dropout = nn.Dropout(dropout)
+        self.pamnet_direct = nn.Linear(fusion_dim, 1)
+        self.fusion_weight = nn.Parameter(torch.tensor(0.1))
     
     def _init_predictor_weights(self):
-        for i, module in enumerate(self.predictor.modules()):
+        for module in self.predictor.modules():
             if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight, gain=0.1)
+                if module.weight.shape[1] == self.fusion_dim * 2:
+                    nn.init.xavier_uniform_(module.weight, gain=0.5)
+                    with torch.no_grad():
+                        module.weight[:, :self.fusion_dim] *= 2.0  # PAMNet side
+                        module.weight[:, self.fusion_dim:] *= 0.5  # UniMol side
+                else:
+                    nn.init.xavier_uniform_(module.weight, gain=0.1)
+                
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
     
@@ -134,12 +144,13 @@ class Attention_Fusion(nn.Module):
                 pamnet_features = self.extract_pamnet_features(graph_data)
         else:
             pamnet_features = self.extract_pamnet_features(graph_data)
-        
+
         if unimol_embeddings.dim() == 1:
             unimol_embeddings = unimol_embeddings.unsqueeze(0)
-        
-        pamnet_proj = self.pamnet_proj(pamnet_features)  
-        unimol_proj = self.unimol_proj(unimol_embeddings)  
+
+
+        pamnet_proj = self.pamnet_proj(pamnet_features * self.pamnet_scale)  
+        unimol_proj = self.unimol_proj(unimol_embeddings * self.unimol_scale)  
         
         pamnet_seq = pamnet_proj.unsqueeze(1)  
         unimol_seq = unimol_proj.unsqueeze(1)  
@@ -166,8 +177,12 @@ class Attention_Fusion(nn.Module):
         fused = torch.cat([pamnet_attended, unimol_attended], dim=-1)  
         
         fused = self.norm3(fused + self.ffn(fused))
+
+        direct_output = self.pamnet_direct(pamnet_proj).squeeze(-1)
+        fusion_output = self.predictor(fused).squeeze(-1)
+        output = direct_output + self.fusion_weight * fusion_output
         
-        output = self.predictor(fused).squeeze(-1)  
+#        output = self.predictor(fused).squeeze(-1)  
         
         if return_attention:
             attention_info = {
