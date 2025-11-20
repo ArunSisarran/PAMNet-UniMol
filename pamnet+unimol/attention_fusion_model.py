@@ -13,6 +13,7 @@ class Attention_Fusion(nn.Module):
         self.pamnet_model = pamnet_model
         self.freeze_pamnet = freeze_pamnet
         self.fusion_dim = fusion_dim
+        self.fustion_weight_raw = nn.Parameter(torch.tensor(1.0))
         
         if freeze_pamnet:
             for param in self.pamnet_model.parameters():
@@ -179,7 +180,7 @@ class Attention_Fusion(nn.Module):
         fused = self.norm3(fused + self.ffn(fused))
 
         direct_output = self.pamnet_direct(pamnet_proj).squeeze(-1)
-        fusion_output = self.predictor(fused).squeeze(-1)
+        fusion_output = torch.sigmoid(self.fustion_weight_raw)
         output = direct_output + self.fusion_weight * fusion_output
         
 #        output = self.predictor(fused).squeeze(-1)  
