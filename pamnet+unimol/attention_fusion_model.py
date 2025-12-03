@@ -20,7 +20,7 @@ class Attention_Fusion(nn.Module):
             for param in self.pamnet_model.parameters():
                 param.requires_grad = False
         
-        pamnet_dim = pamnet_model.dim  
+        pamnet_dim = pamnet_model.dim
 
         self.pamnet_scale = nn.Parameter(torch.ones(1))
         self.unimol_scale = nn.Parameter(torch.ones(1))
@@ -28,7 +28,7 @@ class Attention_Fusion(nn.Module):
         self.pamnet_proj = nn.Linear(pamnet_dim, fusion_dim)
         self.unimol_proj = nn.Linear(unimol_dim, fusion_dim)
         
-        self.pamnet_direct = nn.Linear(fusion_dim, 1)
+        self.pamnet_direct = nn.Linear(pamnet_dim, 1)
         
         self.cross_attn_p2u = nn.MultiheadAttention(
             embed_dim=fusion_dim,
@@ -86,9 +86,11 @@ class Attention_Fusion(nn.Module):
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
         
+        # Init Projections
         nn.init.xavier_uniform_(self.pamnet_proj.weight)
         nn.init.xavier_uniform_(self.unimol_proj.weight)
 
+        # Init Direct Predictor
         nn.init.xavier_uniform_(self.pamnet_direct.weight)
         if self.pamnet_direct.bias is not None:
             nn.init.zeros_(self.pamnet_direct.bias)
@@ -167,11 +169,11 @@ class Attention_Fusion(nn.Module):
         if unimol_embeddings.dim() == 1:
             unimol_embeddings = unimol_embeddings.unsqueeze(0)
 
+        pamnet_baseline_pred = self.pamnet_direct(pamnet_features).squeeze(-1)
+
         pamnet_proj = self.pamnet_proj(pamnet_features * self.pamnet_scale)  
         unimol_proj = self.unimol_proj(unimol_embeddings * self.unimol_scale)  
-
-        pamnet_baseline_pred = self.pamnet_direct(pamnet_proj).squeeze(-1)
-
+        
         pamnet_seq = pamnet_proj.unsqueeze(1)  
         unimol_seq = unimol_proj.unsqueeze(1)  
         
