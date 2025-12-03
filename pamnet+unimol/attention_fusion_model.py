@@ -20,7 +20,7 @@ class Attention_Fusion(nn.Module):
             for param in self.pamnet_model.parameters():
                 param.requires_grad = False
         
-        pamnet_dim = pamnet_model.dim
+        pamnet_dim = pamnet_model.dim  # Usually 128
 
         self.pamnet_scale = nn.Parameter(torch.ones(1))
         self.unimol_scale = nn.Parameter(torch.ones(1))
@@ -29,6 +29,7 @@ class Attention_Fusion(nn.Module):
         self.unimol_proj = nn.Linear(unimol_dim, fusion_dim)
         
         self.pamnet_direct = nn.Linear(pamnet_dim, 1)
+        self.head_copied = self._init_pamnet_head(pamnet_dim)
         
         self.cross_attn_p2u = nn.MultiheadAttention(
             embed_dim=fusion_dim,
@@ -70,9 +71,24 @@ class Attention_Fusion(nn.Module):
         )
         
         self.dropout = nn.Dropout(dropout)
-        self._init_weights()
+        self._init_fusion_weights()
     
-    def _init_weights(self):
+    def _init_pamnet_head(self, dim):
+        for name, module in self.pamnet_model.named_modules():
+            if isinstance(module, nn.Linear):
+                if module.in_features == dim and module.out_features == 1:
+                    print(f"  Found pre-trained head: {name}. Copying weights...")
+                    with torch.no_grad():
+                        self.pamnet_direct.weight.copy_(module.weight)
+                        if module.bias is not None and self.pamnet_direct.bias is not None:
+                            self.pamnet_direct.bias.copy_(module.bias)
+                    return True
+        
+        print("  WARNING: Could not find pre-trained output head (Linear layer with out=1).")
+        print("  self.pamnet_direct initialized randomly. Performance will start low.")
+        return False
+
+    def _init_fusion_weights(self):
         # Init fusion predictor
         for module in self.predictor.modules():
             if isinstance(module, nn.Linear):
@@ -90,22 +106,17 @@ class Attention_Fusion(nn.Module):
         nn.init.xavier_uniform_(self.pamnet_proj.weight)
         nn.init.xavier_uniform_(self.unimol_proj.weight)
 
-        # Init Direct Predictor
-        nn.init.xavier_uniform_(self.pamnet_direct.weight)
-        if self.pamnet_direct.bias is not None:
-            nn.init.zeros_(self.pamnet_direct.bias)
-    
     def set_output_bias(self, target_mean):
-        # Set bias for the fusion predictor
         final_layer = self.predictor[-1]
         if isinstance(final_layer, nn.Linear) and final_layer.bias is not None:
             nn.init.constant_(final_layer.bias, target_mean)
             
-        # Set bias for the direct PAMNet predictor
-        if self.pamnet_direct.bias is not None:
+        if not self.head_copied and self.pamnet_direct.bias is not None:
             nn.init.constant_(self.pamnet_direct.bias, target_mean)
-            
-        print(f"  Set output bias to target mean: {target_mean:.4f}")
+            print(f"  Set output bias for both branches to: {target_mean:.4f}")
+        else:
+            print(f"  Set output bias for Fusion branch to: {target_mean:.4f}")
+            print(f"  Preserved pre-trained bias for PAMNet branch.")
 
     def extract_pamnet_features(self, data):
         x_raw = data.x
