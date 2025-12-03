@@ -342,6 +342,8 @@ def main():
         
         current_lr = optimizer.param_groups[0]['lr']
 
+        gate_value = torch.sigmoid(model.gate_param).item()
+
         if not args.no_wandb:
             wandb.log({
                 "epoch": epoch + 1,
@@ -355,7 +357,7 @@ def main():
               'Test MAE: {:.7f}'.format(epoch+1, train_loss_ema, val_loss_ema, test_loss_ema))
         print(f"PAMNet scale: {model.pamnet_scale.item():.4f}")
         print(f"UniMol scale: {model.unimol_scale.item():.4f}")
-        print(f"Fusion weight: {model.fusion_weight.item():.4f}")
+        print(f"Gate Value (0=PAMNet, 1=Fusion): {gate_value:.6f}")
         print(f"Ratio (PAMNet/UniMol): {(model.pamnet_scale / model.unimol_scale).item():.2f}")
 
     print('Best Validation MAE:', best_val_loss)
