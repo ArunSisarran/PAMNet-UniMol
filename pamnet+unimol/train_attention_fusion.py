@@ -269,7 +269,7 @@ def main():
 
     ema = EMA(model, decay=0.999)
     
-    save_folder = osp.join(".", "save", args.dataset + "_simple_fusion")
+    save_folder = osp.join(".", "save", args.dataset + "atten_fusion")
     if not osp.exists(save_folder):
         os.makedirs(save_folder)
     
@@ -324,15 +324,9 @@ def main():
             test_loss_ema = test(model, test_loader, ema, device)
             best_val_loss = val_loss_ema
             patience_counter = 0
+
+            torch.save(model.state_dict(), osp.join(save_folder, "best_fusion_qm9.pt"))
             
-            #torch.save({
-            #    'epoch': epoch,
-            #    'model_state_dict': model.state_dict(),
-            #    'optimizer_state_dict': optimizer.state_dict(),
-            #    'val_loss': val_loss,
-            #    'test_loss': test_loss,
-            #    'config': vars(args),
-            #}, osp.join(save_folder, "best_attention_fusion.pt"))
         else:
             patience_counter += 1
             
