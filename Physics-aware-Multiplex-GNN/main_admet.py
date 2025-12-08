@@ -69,6 +69,8 @@ def main():
     parser.add_argument('--wd', type=float, default=0)
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--save_dir', type=str, default='./saved_models')
+    parser.add_argument('--dim', type=int, default=128)
+    parser.add_argument('--n_layer', type=int, default=4)
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
