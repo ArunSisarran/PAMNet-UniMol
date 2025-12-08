@@ -27,9 +27,12 @@ class PAMNet(nn.Module):
         self.n_layer = config.n_layer
         self.cutoff_l = config.cutoff_l
         self.cutoff_g = config.cutoff_g
+        self.admet_datasets = ["Caco2_Wang", "HIA_Hou", "hERG", "Solubility_AqSolDB", "ADMET"]
 
         if self.dataset[:3].lower() == "rna":
             self.embeddings = nn.Parameter(torch.ones((3, self.dim))) # only C, N, O atoms for RNA
+        elif self.dataset in self.admet_datasets:
+            self.embeddings = nn.Parameter(torch.ones((10, self.dim)))
         else:
             self.embeddings = nn.Parameter(torch.ones((5, self.dim)))
             self.init_linear = nn.Linear(18, self.dim, bias=False)
@@ -101,7 +104,7 @@ class PAMNet(nn.Module):
         x_raw = data.x
         batch = data.batch
 
-        if self.dataset == "QM9":
+        if self.dataset == "QM9" or self.dataset in self.admet_datasets:
             edge_index_l = data.edge_index
             pos = data.pos
             x = torch.index_select(self.embeddings, 0, x_raw.long())
