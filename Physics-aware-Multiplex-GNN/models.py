@@ -215,7 +215,7 @@ class PAMNet(nn.Module):
         out = (out * att_weight).sum(dim=-1)
         out = out.sum(dim=0).unsqueeze(-1)
 
-        if self.dataset == "QM9":
+        if self.dataset == "QM9" or self.dataset in self.admet_datasets:
             out = global_add_pool(out, batch)
         elif self.dataset == "PDBbind":
             out = out * all_index.unsqueeze(-1)
