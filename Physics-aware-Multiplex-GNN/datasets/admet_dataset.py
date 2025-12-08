@@ -49,7 +49,8 @@ class ADMET3DDataset(InMemoryDataset):
                 raise ValueError(f"Dataset {self.tdc_name} not found in ADME or Tox.")
 
         split = loader.get_split(method='scaffold', seed=42)
-        df = split[self.mode]
+        lookup_key = 'valid' if self.mode == 'val' else self.mode
+        df = split[lookup_key]
         
         data_list = []
         print(f"Generating 3D graphs for {self.mode} split ({len(df)} samples)...")
