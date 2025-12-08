@@ -89,8 +89,8 @@ def main():
 
     config = Config(
         dataset=args.dataset, 
-        dim=128, 
-        n_layer=4, 
+        dim=args.dim, 
+        n_layer=args.n_layer, 
         cutoff_l=5.0, 
         cutoff_g=5.0
     )
