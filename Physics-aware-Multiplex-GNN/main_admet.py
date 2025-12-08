@@ -64,7 +64,7 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--dataset', type=str, default='Caco2_Wang')
     parser.add_argument('--task', type=str, default='regression', choices=['regression', 'classification'])
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--wd', type=float, default=0)
     parser.add_argument('--batch_size', type=int, default=32)
