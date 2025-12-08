@@ -184,14 +184,13 @@ def main():
                 'config': vars(args),
             }, save_path)
             
-            print(f'Epoch {epoch+1:03d} | Loss: {train_loss:.5f} | '
-                  f'Val {metric}: {val_score:.5f} | Test {metric}: {test_score_at_best:.5f} | '
-                  f'LR: {current_lr:.2e} | ★ BEST')
+            print(f'Epoch {epoch+1:03d} Loss: {train_loss:.5f} '
+                  f'Val {metric}: {val_score:.5f} Test {metric}: {test_score_at_best:.5f}')
         else:
             patience_counter += 1
-            print(f'Epoch {epoch+1:03d} | Loss: {train_loss:.5f} | '
-                  f'Val {metric}: {val_score:.5f} | '
-                  f'LR: {current_lr:.2e} | Patience: {patience_counter}/{args.patience}')
+            print(f'Epoch {epoch+1:03d} Loss: {train_loss:.5f} '
+                  f'Val {metric}: {val_score:.5f} '
+                  f'Patience: {patience_counter}/{args.patience}')
         
         if patience_counter >= args.patience:
             print(f"\n{'='*70}")
