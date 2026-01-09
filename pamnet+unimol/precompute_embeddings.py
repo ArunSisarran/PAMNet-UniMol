@@ -1,55 +1,60 @@
-"""
-Pre-compute UniMol embeddings for QM9 dataset
-Run this ONCE before training to save time
-"""
-
 import os
 import sys
 import os.path as osp
 import torch
 from tqdm import tqdm
 import argparse
-import time
 import numpy as np
 import random
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-pamnet_dir = os.path.join(os.path.dirname(current_dir), "Physics-aware-Multiplex-GNN")
-sys.path.append(pamnet_dir)
-sys.path.append(os.path.join(pamnet_dir, "datasets"))
+sys.path.append(current_dir)
+sys.path.append(os.path.join(current_dir, "datasets"))
 
-from qm9_dataset import QM9
 from data_processing import DataProcessing
 
 
 def precompute_unimol_embeddings(dataset, data_processor, save_path, batch_size=128):
-    """
-    Pre-compute UniMol embeddings for entire dataset and save to disk
-    
-    Args:
-        dataset: QM9 dataset
-        data_processor: DataProcessing instance
-        save_path: Path to save embeddings
-        batch_size: Larger batch for faster processing (no backprop needed)
-    """
-    print(f"Pre-computing UniMol embeddings for {len(dataset)} molecules...")
-    print(f"Processing in batches of {batch_size}...")
-    
     all_embeddings = []
     failed_indices = []
     
-    # Process in batches
     for i in tqdm(range(0, len(dataset), batch_size)):
         batch_end = min(i + batch_size, len(dataset))
         batch_data = [dataset[j] for j in range(i, batch_end)]
         
+        # Extract SMILES from dataset
         smiles_list = []
-        for data in batch_data:
+        for idx, data in enumerate(batch_data):
             if hasattr(data, 'smiles'):
                 smiles_list.append(data.smiles)
             else:
-                smiles_list.append("C")  # Fallback
-                failed_indices.append(i + len(smiles_list) - 1)
+                try:
+                    from rdkit import Chem
+                    mol = Chem.RWMol()
+                    
+                    type_to_symbol = {0: 'H', 1: 'C', 2: 'N', 3: 'O', 4: 'F', 
+                                     5: 'S', 6: 'Cl', 7: 'P', 8: 'Br', 9: 'I'}
+                    
+                    for atom_type in data.x.tolist():
+                        symbol = type_to_symbol.get(atom_type, 'C')
+                        mol.AddAtom(Chem.Atom(symbol))
+                    
+                    if data.edge_index.numel() > 0:
+                        added_bonds = set()
+                        for j in range(data.edge_index.shape[1]):
+                            begin = int(data.edge_index[0, j])
+                            end = int(data.edge_index[1, j])
+                            bond_key = tuple(sorted([begin, end]))
+                            if bond_key not in added_bonds and begin != end:
+                                mol.AddBond(begin, end, Chem.BondType.SINGLE)
+                                added_bonds.add(bond_key)
+                    
+                    smiles = Chem.MolToSmiles(mol)
+                    smiles_list.append(smiles)
+                except Exception as e:
+                    print(f"Warning: Failed to convert molecule {i+idx} to SMILES: {e}")
+                    smiles_list.append("C")
+                    failed_indices.append(i + idx)
         
         with torch.no_grad():
             unimol_result = data_processor.data_process_unimol(smiles_list)
@@ -58,7 +63,6 @@ def precompute_unimol_embeddings(dataset, data_processor, save_path, batch_size=
             if embeddings is not None:
                 all_embeddings.append(embeddings.cpu())
             else:
-                print(f"Warning: Batch {i}-{batch_end} failed, using zero vectors")
                 if all_embeddings:
                     emb_dim = all_embeddings[-1].shape[-1]
                 else:
@@ -78,24 +82,30 @@ def precompute_unimol_embeddings(dataset, data_processor, save_path, batch_size=
         'embedding_dim': all_embeddings.shape[-1]
     }, save_path)
     
-    print(f"\n{'='*60}")
-    print(f"Successfully saved embeddings to {save_path}")
-    print(f"Total molecules: {len(all_embeddings)}")
-    print(f"Embedding shape: {all_embeddings.shape}")
-    print(f"Failed molecules: {len(failed_indices)} ({100*len(failed_indices)/len(dataset):.2f}%)")
-    print(f"File size: {os.path.getsize(save_path) / (1024**2):.2f} MB")
-    print(f"{'='*60}\n")
-    
     return all_embeddings
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Pre-compute UniMol embeddings for QM9')
-    parser.add_argument('--dataset', type=str, default='QM9', help='Dataset name')
-    parser.add_argument('--batch_size', type=int, default=128, help='Batch size for processing')
-    parser.add_argument('--unimol_model', type=str, default='unimolv2', help='UniMol model name')
-    parser.add_argument('--unimol_size', type=str, default='84m', help='UniMol model size')
-    parser.add_argument('--target', type=int, default=7, help='Target property index')
+    parser = argparse.ArgumentParser(description='Pre-compute UniMol embeddings')
+    
+    parser.add_argument('--dataset_type', type=str, default='QM9', 
+                       choices=['QM9', 'ADMET'],
+                       help='Type of dataset: QM9 or ADMET')
+    parser.add_argument('--dataset_name', type=str, default='QM9',
+                       help='For QM9: "QM9". For ADMET: "Caco2_Wang", "Lipophilicity_AstraZeneca", etc.')
+    parser.add_argument('--qm9_root', type=str, default='./data/QM9',
+                       help='Root directory for QM9 data')
+    parser.add_argument('--admet_root', type=str, default='./data/admet',
+                       help='Root directory for ADMET data')
+    parser.add_argument('--target', type=int, default=7,
+                       help='Target property index (QM9 only)')
+    parser.add_argument('--batch_size', type=int, default=128,
+                       help='Batch size for processing')
+    parser.add_argument('--unimol_model', type=str, default='unimolv2',
+                       help='UniMol model name')
+    parser.add_argument('--unimol_size', type=str, default='84m',
+                       help='UniMol model size')
+    
     args = parser.parse_args()
 
     def set_seed(seed):
@@ -104,61 +114,83 @@ def main():
         np.random.seed(seed)
         random.seed(seed)
     
-    set_seed(480)  
+    seed = 480 if args.dataset_type == 'QM9' else 42
+    set_seed(seed)
     
-    class MyTransform(object):
-        def __call__(self, data):
-            target = args.target
-            if target in [7, 8, 9, 10]:
-                target = target + 5
-            data.y = data.y[:, target]
-            return data
-
+    print(f"PRE-COMPUTING EMBEDDINGS FOR {args.dataset_type}")
     
-    print("Loading QM9 dataset...")
-    path = osp.join('.', 'data', args.dataset)
-    dataset = QM9(path, transform=MyTransform())
-    print(f"Loaded {len(dataset)} molecules")
-    
-    print("\nInitializing UniMol...")
     data_processor = DataProcessing(
         pamnet_model=None,
         unimol_model=args.unimol_model,
         unimol_model_size=args.unimol_size
     )
     
-    save_dir = osp.join('.', 'data', args.dataset, 'precomputed')
-    os.makedirs(save_dir, exist_ok=True)
-    save_path = osp.join(save_dir, 'unimol_embeddings.pt')
-    
-    if os.path.exists(save_path):
-        response = input(f"\nEmbeddings already exist at {save_path}. Overwrite? (y/n): ")
-        if response.lower() != 'y':
-            print("Aborted.")
-            return
-    
-    print("\nStarting pre-computation...")
-    print("This will take about 20-30 minutes...\n")
-    
-    embeddings = precompute_unimol_embeddings(
-        dataset=dataset,
-        data_processor=data_processor,
-        save_path=save_path,
-        batch_size=args.batch_size
-    )
-    
-    print("Verifying saved embeddings...")
-    loaded = torch.load(save_path)
-    print(f"✓ Loaded embeddings shape: {loaded['embeddings'].shape}")
-    print(f"✓ Number of molecules: {loaded['num_molecules']}")
-    print(f"✓ Embedding dimension: {loaded['embedding_dim']}")
-    
-    print("\n" + "="*60)
-    print("Pre-computation complete!")
-    print("You can now use these embeddings in training with:")
-    print(f"  python simple_model.py --use_precomputed")
-    print("="*60)
-
-
+    if args.dataset_type == 'QM9':
+        from datasets import QM9
+        
+        class MyTransform(object):
+            def __call__(self, data):
+                target = args.target
+                if target in [7, 8, 9, 10]:
+                    target = target + 5
+                data.y = data.y[:, target]
+                return data
+        
+        print(f"Loading QM9 dataset (target={args.target})...")
+        dataset = QM9(args.qm9_root, transform=MyTransform())
+        print(f"Loaded {len(dataset)} molecules\n")
+        
+        save_dir = osp.join(args.qm9_root, 'precomputed')
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = osp.join(save_dir, 'unimol_embeddings.pt')
+        
+        if os.path.exists(save_path):
+            response = input(f"Embeddings already exist at {save_path}. Overwrite? (y/n): ")
+            if response.lower() != 'y':
+                print("Aborted.")
+                return
+        
+        embeddings = precompute_unimol_embeddings(
+            dataset=dataset,
+            data_processor=data_processor,
+            save_path=save_path,
+            batch_size=args.batch_size
+        )
+        
+        loaded = torch.load(save_path)
+        
+    # ADMET PROCESSING
+    elif args.dataset_type == 'ADMET':
+        from datasets.admet_dataset import ADMET3DDataset
+        
+        print(f"Loading {args.dataset_name} dataset...")
+        
+        train_dataset = ADMET3DDataset(args.admet_root, args.dataset_name, mode='train')
+        val_dataset = ADMET3DDataset(args.admet_root, args.dataset_name, mode='val')
+        test_dataset = ADMET3DDataset(args.admet_root, args.dataset_name, mode='test')
+        
+        save_dir = osp.join(args.admet_root, 'processed', args.dataset_name, 'precomputed')
+        os.makedirs(save_dir, exist_ok=True)
+        
+        for split_name, dataset in [('train', train_dataset), 
+                                     ('val', val_dataset), 
+                                     ('test', test_dataset)]:
+            
+            save_path = osp.join(save_dir, f'unimol_embeddings_{split_name}.pt')
+            
+            if os.path.exists(save_path):
+                print(f"\n{split_name} embeddings already exist at {save_path}")
+                response = input(f"Overwrite? (y/n): ")
+                if response.lower() != 'y':
+                    print(f"Skipping {split_name}...\n")
+                    continue
+            
+            embeddings = precompute_unimol_embeddings(
+                dataset=dataset,
+                data_processor=data_processor,
+                save_path=save_path,
+                batch_size=args.batch_size
+            )
+        
 if __name__ == "__main__":
     main()
