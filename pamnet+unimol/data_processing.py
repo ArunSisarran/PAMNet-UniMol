@@ -57,7 +57,8 @@ class DataProcessing:
             data_type="molecule",
             model_name=unimol_model,
             model_size=unimol_model_size,
-            remove_hs=False
+            remove_hs=False,
+            use_gpu=torch.cuda.is_available()
         )
 
     def smiles_to_pamnet(self, smiles):
