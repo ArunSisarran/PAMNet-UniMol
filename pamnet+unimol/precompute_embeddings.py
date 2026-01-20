@@ -8,8 +8,9 @@ import numpy as np
 import random
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
+pamnet_dir = os.path.join(os.path.dirname(current_dir), "Physics-aware-Multiplex-GNN")
 sys.path.append(current_dir)
-sys.path.append(os.path.join(current_dir, "datasets"))
+sys.path.append(pamnet_dir)
 
 from data_processing import DataProcessing
 
@@ -168,29 +169,42 @@ def main():
         train_dataset = ADMET3DDataset(args.admet_root, args.dataset_name, mode='train')
         val_dataset = ADMET3DDataset(args.admet_root, args.dataset_name, mode='val')
         test_dataset = ADMET3DDataset(args.admet_root, args.dataset_name, mode='test')
-        
+
+        print(f"Loaded {args.dataset_name}:")
+        print(f"  Train: {len(train_dataset)} molecules")
+        print(f"  Val:   {len(val_dataset)} molecules")
+        print(f"  Test:  {len(test_dataset)} molecules\n")
+
         save_dir = osp.join(args.admet_root, 'processed', args.dataset_name, 'precomputed')
         os.makedirs(save_dir, exist_ok=True)
         
-        for split_name, dataset in [('train', train_dataset), 
-                                     ('val', val_dataset), 
+        for split_name, dataset in [('train', train_dataset),
+                                     ('val', val_dataset),
                                      ('test', test_dataset)]:
-            
+
             save_path = osp.join(save_dir, f'unimol_embeddings_{split_name}.pt')
-            
+
             if os.path.exists(save_path):
                 print(f"\n{split_name} embeddings already exist at {save_path}")
                 response = input(f"Overwrite? (y/n): ")
                 if response.lower() != 'y':
                     print(f"Skipping {split_name}...\n")
                     continue
-            
+
+            print(f"\nProcessing {split_name} split ({len(dataset)} molecules)...")
             embeddings = precompute_unimol_embeddings(
                 dataset=dataset,
                 data_processor=data_processor,
                 save_path=save_path,
                 batch_size=args.batch_size
             )
-        
+
+            loaded = torch.load(save_path)
+            print(f"  Saved {split_name} embeddings: shape={loaded['embeddings'].shape}")
+            if loaded['failed_indices']:
+                print(f"  Warning: {len(loaded['failed_indices'])} molecules failed SMILES conversion")
+
+        print(f"\nDone! All embeddings saved to {save_dir}/")
+
 if __name__ == "__main__":
     main()

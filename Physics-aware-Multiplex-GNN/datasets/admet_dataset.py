@@ -118,7 +118,7 @@ class ADMET3DDataset(InMemoryDataset):
 
             y = torch.tensor([target], dtype=torch.float).view(1, -1)
 
-            data = Data(x=x, z=z, pos=pos, edge_index=edge_index, y=y)
+            data = Data(x=x, z=z, pos=pos, edge_index=edge_index, y=y, smiles=smiles)
             
             if self.pre_filter is not None and not self.pre_filter(data):
                 continue
