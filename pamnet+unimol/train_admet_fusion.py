@@ -31,8 +31,6 @@ from attention_fusion_model import Attention_Fusion
 
 
 class ADMETWithEmbeddings(torch.utils.data.Dataset):
-    """Wrapper dataset that pairs ADMET graph data with precomputed UniMol embeddings."""
-
     def __init__(self, admet_dataset, embeddings):
         self.admet_dataset = admet_dataset
         self.embeddings = embeddings
@@ -49,7 +47,6 @@ class ADMETWithEmbeddings(torch.utils.data.Dataset):
 
 
 def collate_with_embeddings(batch):
-    """Custom collate function to batch graph data with embeddings."""
     data_list, embeddings = zip(*batch)
     batched_data = Batch.from_data_list(data_list)
     batched_embeddings = torch.stack(embeddings)
@@ -70,12 +67,6 @@ def count_parameters(model):
 
 
 def evaluate(model, loader, ema, device, is_classification):
-    """Evaluate model on a dataset.
-
-    Returns:
-        score: AUC for classification, MAE for regression
-        metric_name: 'AUC' or 'MAE'
-    """
     model.eval()
     ema.assign(model)
 
@@ -187,7 +178,6 @@ def main():
     print(f"Device: {device}")
     print("=" * 70)
 
-    # Initialize WandB
     if not args.no_wandb:
         wandb.init(
             project=args.wandb_project,
@@ -231,12 +221,10 @@ def main():
     unimol_dim = train_embeddings.shape[-1]
     print(f"  UniMol embedding dim: {unimol_dim}")
 
-    # Create wrapped datasets with embeddings
     train_dataset_wrapped = ADMETWithEmbeddings(train_dataset, train_embeddings)
     val_dataset_wrapped = ADMETWithEmbeddings(val_dataset, val_embeddings)
     test_dataset_wrapped = ADMETWithEmbeddings(test_dataset, test_embeddings)
 
-    # Create data loaders
     train_loader = DataLoader(
         train_dataset_wrapped,
         batch_size=args.batch_size,
@@ -261,7 +249,6 @@ def main():
 
     print("Data loaded!")
 
-    # Create PAMNet config - use ADMET atom types (10 types)
     config = Config(
         dataset=args.dataset,
         dim=args.dim,
@@ -270,10 +257,8 @@ def main():
         cutoff_g=args.cutoff_g
     )
 
-    # Initialize PAMNet
     pamnet_model = PAMNet(config).to(device)
 
-    # Load pretrained PAMNet if provided
     if args.pamnet_checkpoint and osp.exists(args.pamnet_checkpoint):
         print(f"\nLoading pretrained PAMNet from {args.pamnet_checkpoint}")
         checkpoint = torch.load(args.pamnet_checkpoint, map_location=device)
@@ -285,7 +270,6 @@ def main():
     else:
         print("\nNo PAMNet checkpoint provided - training from scratch")
 
-    # Create fusion model
     model = Attention_Fusion(
         pamnet_model=pamnet_model,
         unimol_dim=unimol_dim,
@@ -307,10 +291,8 @@ def main():
         model.set_output_bias(target_mean)
         print(f"Target mean: {target_mean:.4f}")
 
-    # Optimizer
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
 
-    # Learning rate scheduler
     if args.scheduler == 'exponential':
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.gamma)
     else:
@@ -325,26 +307,22 @@ def main():
         after_scheduler=scheduler
     )
 
-    # EMA
     ema = EMA(model, decay=0.999)
 
-    # Loss function
     if is_classification:
         criterion = nn.BCEWithLogitsLoss()
         best_val_score = 0.0
-        compare = lambda new, best: new > best  # Higher AUC is better
+        compare = lambda new, best: new > best
         metric_name = "AUC"
     else:
         criterion = nn.L1Loss()
         best_val_score = float('inf')
-        compare = lambda new, best: new < best  # Lower MAE is better
+        compare = lambda new, best: new < best
         metric_name = "MAE"
 
-    # Create save directory
     save_dir = osp.join(args.save_dir, args.dataset)
     os.makedirs(save_dir, exist_ok=True)
 
-    # WandB config update
     if not args.no_wandb:
         wandb.config.update({
             "trainable_parameters": trainable_params,
@@ -385,7 +363,6 @@ def main():
             clip_grad_norm_(model.parameters(), max_norm=args.grad_clip)
             optimizer.step()
 
-            # Update scheduler
             curr_epoch = epoch + float(step) / len(train_loader)
             scheduler_warmup.step(curr_epoch)
 
@@ -393,7 +370,6 @@ def main():
             loss_all += loss.item() * data.num_graphs
             step += 1
 
-            # Log batch metrics
             if not args.no_wandb and step % 10 == 0:
                 wandb.log({
                     "batch/loss": loss.item(),
@@ -406,13 +382,11 @@ def main():
         current_lr = optimizer.param_groups[0]['lr']
         epoch_time = time.time() - epoch_start
 
-        # Check for improvement
         if compare(val_score, best_val_score):
             best_val_score = val_score
             best_epoch = epoch
             patience_counter = 0
 
-            # Evaluate on test set
             test_score_at_best, _ = evaluate(model, test_loader, ema, device, is_classification)
 
             # Save best model
@@ -427,7 +401,6 @@ def main():
                 'gate_value': torch.sigmoid(model.gate_param).item()
             }, save_path)
 
-            # Log gate and scale values
             gate_val = torch.sigmoid(model.gate_param).item()
             print(f"Epoch {epoch+1:03d} | Loss: {train_loss:.5f} | "
                   f"Val {metric_name}: {val_score:.5f} | Test {metric_name}: {test_score_at_best:.5f} | "
@@ -438,7 +411,6 @@ def main():
                   f"Val {metric_name}: {val_score:.5f} | "
                   f"Patience: {patience_counter}/{args.patience} | Time: {epoch_time:.1f}s")
 
-        # WandB logging
         if not args.no_wandb:
             log_dict = {
                 "epoch": epoch + 1,
@@ -453,12 +425,10 @@ def main():
                 log_dict[f"test/{metric_name.lower()}"] = test_score_at_best
             wandb.log(log_dict)
 
-        # Early stopping
         if patience_counter >= args.patience:
             print(f"\nEarly stopping at epoch {epoch+1} (no improvement for {args.patience} epochs)")
             break
 
-    # Final summary
     print("\n" + "=" * 70)
     print("Training Complete!")
     print("=" * 70)
