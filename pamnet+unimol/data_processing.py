@@ -33,12 +33,11 @@ class DataProcessing:
                 state_dict = torch.load(pamnet_state_dict_path, map_location=map_location)
                 
                 config = Config(
-                    dataset="rna",
-                    dim=16,
-                    n_layer=1,
+                    dataset="QM9",
+                    dim=128,
+                    n_layer=6,
                     cutoff_l=5.0,
-                    cutoff_g=10.0,
-                    flow='source_to_target'
+                    cutoff_g=5.0
                 )
                 
                 self.pamnet_model = PAMNet(config)
