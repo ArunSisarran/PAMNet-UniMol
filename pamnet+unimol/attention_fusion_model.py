@@ -13,19 +13,23 @@ class Attention_Fusion(nn.Module):
         self.pamnet_model = pamnet_model
         self.freeze_pamnet = freeze_pamnet
         self.fusion_dim = fusion_dim
-        self.fustion_weight_raw = nn.Parameter(torch.tensor(1.0))
+        
+        self.gate_param = nn.Parameter(torch.tensor(-5.0))
         
         if freeze_pamnet:
             for param in self.pamnet_model.parameters():
                 param.requires_grad = False
         
-        pamnet_dim = pamnet_model.dim  
+        pamnet_dim = pamnet_model.dim  # Usually 128
 
         self.pamnet_scale = nn.Parameter(torch.ones(1))
         self.unimol_scale = nn.Parameter(torch.ones(1))
 
         self.pamnet_proj = nn.Linear(pamnet_dim, fusion_dim)
         self.unimol_proj = nn.Linear(unimol_dim, fusion_dim)
+        
+        self.pamnet_direct = nn.Linear(pamnet_dim, 1)
+        self.head_copied = self._init_pamnet_head(pamnet_dim)
         
         self.cross_attn_p2u = nn.MultiheadAttention(
             embed_dim=fusion_dim,
@@ -66,13 +70,26 @@ class Attention_Fusion(nn.Module):
             nn.Linear(fusion_dim // 2, 1)
         )
         
-        self._init_predictor_weights()
-        
         self.dropout = nn.Dropout(dropout)
-        self.pamnet_direct = nn.Linear(fusion_dim, 1)
-        self.fusion_weight = nn.Parameter(torch.tensor(0.1))
+        self._init_fusion_weights()
     
-    def _init_predictor_weights(self):
+    def _init_pamnet_head(self, dim):
+        for name, module in self.pamnet_model.named_modules():
+            if isinstance(module, nn.Linear):
+                if module.in_features == dim and module.out_features == 1:
+                    print(f"  Found pre-trained head: {name}. Copying weights...")
+                    with torch.no_grad():
+                        self.pamnet_direct.weight.copy_(module.weight)
+                        if module.bias is not None and self.pamnet_direct.bias is not None:
+                            self.pamnet_direct.bias.copy_(module.bias)
+                    return True
+        
+        print("  WARNING: Could not find pre-trained output head (Linear layer with out=1).")
+        print("  self.pamnet_direct initialized randomly. Performance will start low.")
+        return False
+
+    def _init_fusion_weights(self):
+        # Init fusion predictor
         for module in self.predictor.modules():
             if isinstance(module, nn.Linear):
                 if module.weight.shape[1] == self.fusion_dim * 2:
@@ -82,18 +99,26 @@ class Attention_Fusion(nn.Module):
                         module.weight[:, self.fusion_dim:] *= 0.5  # UniMol side
                 else:
                     nn.init.xavier_uniform_(module.weight, gain=0.1)
-                
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
-    
+        
+        # Init Projections
+        nn.init.xavier_uniform_(self.pamnet_proj.weight)
+        nn.init.xavier_uniform_(self.unimol_proj.weight)
+
     def set_output_bias(self, target_mean):
         final_layer = self.predictor[-1]
         if isinstance(final_layer, nn.Linear) and final_layer.bias is not None:
             nn.init.constant_(final_layer.bias, target_mean)
-            print(f"  Set output bias to target mean: {target_mean:.4f}")
+            
+        if not self.head_copied and self.pamnet_direct.bias is not None:
+            nn.init.constant_(self.pamnet_direct.bias, target_mean)
+            print(f"  Set output bias for both branches to: {target_mean:.4f}")
+        else:
+            print(f"  Set output bias for Fusion branch to: {target_mean:.4f}")
+            print(f"  Preserved pre-trained bias for PAMNet branch.")
 
     def extract_pamnet_features(self, data):
-
         x_raw = data.x
         batch = data.batch
         pos = data.pos
@@ -155,6 +180,7 @@ class Attention_Fusion(nn.Module):
         if unimol_embeddings.dim() == 1:
             unimol_embeddings = unimol_embeddings.unsqueeze(0)
 
+        pamnet_baseline_pred = self.pamnet_direct(pamnet_features).squeeze(-1)
 
         pamnet_proj = self.pamnet_proj(pamnet_features * self.pamnet_scale)  
         unimol_proj = self.unimol_proj(unimol_embeddings * self.unimol_scale)  
@@ -182,19 +208,19 @@ class Attention_Fusion(nn.Module):
         unimol_attended = unimol_attended.squeeze(1)  
         
         fused = torch.cat([pamnet_attended, unimol_attended], dim=-1)  
-        
         fused = self.norm3(fused + self.ffn(fused))
 
-        direct_output = self.pamnet_direct(pamnet_proj).squeeze(-1)
-        fusion_output = torch.sigmoid(self.fustion_weight_raw)
-        output = direct_output + self.fusion_weight * fusion_output
+        fusion_pred = self.predictor(fused).squeeze(-1)
         
-#        output = self.predictor(fused).squeeze(-1)  
+        gate = torch.sigmoid(self.gate_param)
+        
+        output = (1 - gate) * pamnet_baseline_pred + (gate * fusion_pred)
         
         if return_attention:
             attention_info = {
                 'pamnet_to_unimol': attn_p2u,
-                'unimol_to_pamnet': attn_u2p
+                'unimol_to_pamnet': attn_u2p,
+                'gate_value': gate.item()
             }
             return output, attention_info
         

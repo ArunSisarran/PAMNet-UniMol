@@ -23,7 +23,7 @@ class DataProcessing:
     Passes the SMILES input to both the PAMNet model and the UniMol model
     """
 
-    def __init__(self, pamnet_model=None, pamnet_state_dict_path="../Physics-aware-Multiplex-GNN/save/pamnet_rna.pt", 
+    def __init__(self, pamnet_model=None, pamnet_state_dict_path="../Physics-aware-Multiplex-GNN/save/QM9/best_model.pt", 
                  unimol_model: str="unimolv2", unimol_model_size: str="84m"):
 
         map_location = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -33,12 +33,11 @@ class DataProcessing:
                 state_dict = torch.load(pamnet_state_dict_path, map_location=map_location)
                 
                 config = Config(
-                    dataset="rna",
-                    dim=16,
-                    n_layer=1,
+                    dataset="QM9",
+                    dim=128,
+                    n_layer=6,
                     cutoff_l=5.0,
-                    cutoff_g=10.0,
-                    flow='source_to_target'
+                    cutoff_g=5.0
                 )
                 
                 self.pamnet_model = PAMNet(config)
@@ -57,7 +56,8 @@ class DataProcessing:
             data_type="molecule",
             model_name=unimol_model,
             model_size=unimol_model_size,
-            remove_hs=False
+            remove_hs=False,
+            use_gpu=torch.cuda.is_available()
         )
 
     def smiles_to_pamnet(self, smiles):

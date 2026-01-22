@@ -269,7 +269,7 @@ def main():
 
     ema = EMA(model, decay=0.999)
     
-    save_folder = osp.join(".", "save", args.dataset + "_simple_fusion")
+    save_folder = osp.join(".", "save", args.dataset + "atten_fusion")
     if not osp.exists(save_folder):
         os.makedirs(save_folder)
     
@@ -324,15 +324,9 @@ def main():
             test_loss_ema = test(model, test_loader, ema, device)
             best_val_loss = val_loss_ema
             patience_counter = 0
+
+            torch.save(model.state_dict(), osp.join(save_folder, "best_fusion_qm9.pt"))
             
-            #torch.save({
-            #    'epoch': epoch,
-            #    'model_state_dict': model.state_dict(),
-            #    'optimizer_state_dict': optimizer.state_dict(),
-            #    'val_loss': val_loss,
-            #    'test_loss': test_loss,
-            #    'config': vars(args),
-            #}, osp.join(save_folder, "best_attention_fusion.pt"))
         else:
             patience_counter += 1
             
@@ -341,6 +335,8 @@ def main():
             break
         
         current_lr = optimizer.param_groups[0]['lr']
+
+        gate_value = torch.sigmoid(model.gate_param).item()
 
         if not args.no_wandb:
             wandb.log({
@@ -355,7 +351,7 @@ def main():
               'Test MAE: {:.7f}'.format(epoch+1, train_loss_ema, val_loss_ema, test_loss_ema))
         print(f"PAMNet scale: {model.pamnet_scale.item():.4f}")
         print(f"UniMol scale: {model.unimol_scale.item():.4f}")
-        print(f"Fusion weight: {model.fusion_weight.item():.4f}")
+        print(f"Gate Value (0=PAMNet, 1=Fusion): {gate_value:.6f}")
         print(f"Ratio (PAMNet/UniMol): {(model.pamnet_scale / model.unimol_scale).item():.2f}")
 
     print('Best Validation MAE:', best_val_loss)
