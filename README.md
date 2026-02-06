@@ -132,8 +132,6 @@ The model supports multiple molecular property prediction datasets:
 |---------|------|-------------|
 | **QM9** | Regression | 12 quantum mechanical properties (~130k molecules) |
 | **ADMET** | Regression/Classification | Drug-like properties from TDC (Caco2, HIA, hERG, Solubility, etc.) |
-| **PDBbind** | Regression | Protein-ligand binding affinity |
-| **RNA-Puzzles** | Regression | RNA structure prediction (RMSD) |
 
 ## Project Structure
 
@@ -173,18 +171,6 @@ Key hyperparameters:
 | `lr` | 1e-4 | Learning rate |
 | `warmup_epochs` | 5 | Learning rate warmup period |
 | `patience` | 30 | Early stopping patience |
-
-## Citation
-
-If you use this work, please cite:
-
-```bibtex
-@article{pamnet2023,
-  title={A universal framework for accurate and efficient geometric deep learning of molecular systems},
-  journal={Nature Scientific Reports},
-  year={2023}
-}
-```
 
 ## License
 
